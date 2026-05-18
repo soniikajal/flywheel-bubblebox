@@ -17,9 +17,13 @@ import {
 } from "@/lib/bubbleGrid/types";
 
 const CELL_SIZE = 72;
-const RADIUS = CELL_SIZE / 2;
+/** Grid circles use exact radius; goo circles overlap slightly so blur bridges gaps. */
+const GRID_RADIUS = CELL_SIZE / 2;
+const GOO_RADIUS = GRID_RADIUS + 4;
 const SVG_WIDTH = COLS * CELL_SIZE;
 const SVG_HEIGHT = ROWS * CELL_SIZE;
+/** Padding so Gaussian blur is not clipped by SVG or parent overflow. */
+const FILTER_PAD = 28;
 
 export default function BubbleGrid() {
   const [grid, setGrid] = useState<Record<string, BubbleId>>(() => ({
@@ -51,100 +55,139 @@ export default function BubbleGrid() {
     setGrid((current) => shrinkBubble(current, bubbleId) ?? current);
   }, []);
 
+  const viewBox = `${-FILTER_PAD} ${-FILTER_PAD} ${SVG_WIDTH + FILTER_PAD * 2} ${SVG_HEIGHT + FILTER_PAD * 2}`;
+
   return (
     <div className="flex flex-col items-center gap-8 p-8">
       <div
-        className="relative overflow-hidden rounded-2xl bg-[#f7f4ef] shadow-inner"
-        style={{ width: SVG_WIDTH, height: SVG_HEIGHT }}
+        className="rounded-2xl bg-[#f7f4ef] p-3 shadow-inner"
+        style={{
+          width: SVG_WIDTH + FILTER_PAD * 2,
+          height: SVG_HEIGHT + FILTER_PAD * 2,
+        }}
       >
-        <svg
-          width={SVG_WIDTH}
-          height={SVG_HEIGHT}
-          viewBox={`0 0 ${SVG_WIDTH} ${SVG_HEIGHT}`}
-          className="block"
+        <div
+          className="relative"
+          style={{ width: SVG_WIDTH, height: SVG_HEIGHT, margin: FILTER_PAD }}
           aria-label="Bubble grid"
         >
-          <defs>
-            <filter
-              id="goo"
-              x="-50%"
-              y="-50%"
-              width="200%"
-              height="200%"
-              colorInterpolationFilters="sRGB"
-            >
-              <feGaussianBlur in="SourceGraphic" stdDeviation="8" result="blur" />
-              <feColorMatrix
-                in="blur"
-                mode="matrix"
-                values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 18 -7"
-                result="goo"
-              />
-            </filter>
-            <pattern
-              id="gridCircles"
-              width={CELL_SIZE}
-              height={CELL_SIZE}
-              patternUnits="userSpaceOnUse"
-            >
-              <circle
-                cx={CELL_SIZE / 2}
-                cy={CELL_SIZE / 2}
-                r={RADIUS}
-                fill="none"
-                stroke="#d9d2c7"
-                strokeWidth={1}
-              />
-            </pattern>
-          </defs>
-
-          <rect
+          {/* Background grid */}
+          <svg
             width={SVG_WIDTH}
             height={SVG_HEIGHT}
-            fill="url(#gridCircles)"
-            opacity={0.85}
-          />
+            viewBox={viewBox}
+            overflow="visible"
+            className="absolute left-0 top-0 block"
+            aria-hidden
+          >
+            <defs>
+              <pattern
+                id="gridCircles"
+                width={CELL_SIZE}
+                height={CELL_SIZE}
+                patternUnits="userSpaceOnUse"
+              >
+                <circle
+                  cx={CELL_SIZE / 2}
+                  cy={CELL_SIZE / 2}
+                  r={GRID_RADIUS}
+                  fill="none"
+                  stroke="#d9d2c7"
+                  strokeWidth={1}
+                />
+              </pattern>
+            </defs>
+            <rect
+              x={0}
+              y={0}
+              width={SVG_WIDTH}
+              height={SVG_HEIGHT}
+              fill="url(#gridCircles)"
+              opacity={0.85}
+            />
+            {Array.from({ length: ROWS }).map((_, row) =>
+              Array.from({ length: COLS }).map((_, col) => (
+                <circle
+                  key={`grid-${col}-${row}`}
+                  cx={getCellCenter(col, row, CELL_SIZE).x}
+                  cy={getCellCenter(col, row, CELL_SIZE).y}
+                  r={GRID_RADIUS}
+                  fill="none"
+                  stroke="#cfc6b8"
+                  strokeWidth={0.75}
+                  opacity={0.55}
+                />
+              ))
+            )}
+          </svg>
 
-          {Array.from({ length: ROWS }).map((_, row) =>
-            Array.from({ length: COLS }).map((_, col) => (
-              <circle
-                key={`grid-${col}-${row}`}
-                cx={getCellCenter(col, row, CELL_SIZE).x}
-                cy={getCellCenter(col, row, CELL_SIZE).y}
-                r={RADIUS}
-                fill="none"
-                stroke="#cfc6b8"
-                strokeWidth={0.75}
-                opacity={0.55}
-              />
-            ))
-          )}
-
+          {/* One isolated goo layer per bubble */}
           {BUBBLES.map((bubble) => {
             const cells = pixelMap.cellsByBubble[bubble.id];
+            const filterId = `goo-${bubble.id}`;
+
             return (
-              <g
+              <div
                 key={bubble.id}
-                filter="url(#goo)"
-                fill={bubble.color}
+                className="pointer-events-none absolute left-0 top-0 overflow-visible"
+                style={{ width: SVG_WIDTH, height: SVG_HEIGHT }}
                 data-bubble={bubble.id}
               >
-                {cells.map(({ col, row }) => {
-                  const { x, y } = getCellCenter(col, row, CELL_SIZE);
-                  return (
-                    <circle
-                      key={`${bubble.id}-${col}-${row}`}
-                      cx={x}
-                      cy={y}
-                      r={RADIUS}
-                      className="transition-[r,opacity] duration-300 ease-out"
-                    />
-                  );
-                })}
-              </g>
+                <svg
+                  width={SVG_WIDTH}
+                  height={SVG_HEIGHT}
+                  viewBox={viewBox}
+                  overflow="visible"
+                  className="block overflow-visible"
+                  style={{ overflow: "visible" }}
+                  aria-hidden
+                >
+                  <defs>
+                    <filter
+                      id={filterId}
+                      x="-20%"
+                      y="-20%"
+                      width="140%"
+                      height="140%"
+                      colorInterpolationFilters="sRGB"
+                    >
+                      <feGaussianBlur
+                        in="SourceGraphic"
+                        stdDeviation="12"
+                        result="blur"
+                      />
+                      <feColorMatrix
+                        in="blur"
+                        mode="matrix"
+                        values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 20 -9"
+                        result="goo"
+                      />
+                      <feComposite
+                        in="SourceGraphic"
+                        in2="goo"
+                        operator="atop"
+                      />
+                    </filter>
+                  </defs>
+                  <g filter={`url(#${filterId})`} fill={bubble.color}>
+                    {cells.map(({ col, row }) => {
+                      const { x, y } = getCellCenter(col, row, CELL_SIZE);
+                      return (
+                        <circle
+                          key={`${bubble.id}-${col}-${row}`}
+                          cx={x}
+                          cy={y}
+                          r={GOO_RADIUS}
+                          className="transition-[r,opacity] duration-300 ease-out"
+                        />
+                      );
+                    })}
+                  </g>
+                </svg>
+              </div>
             );
           })}
-        </svg>
+        </div>
       </div>
 
       <div className="flex flex-wrap justify-center gap-3 max-w-xl">
