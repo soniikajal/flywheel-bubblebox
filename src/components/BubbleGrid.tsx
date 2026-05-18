@@ -1,5 +1,6 @@
 "use client";
 
+import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useMemo, useState } from "react";
 import {
   canShrinkBubble,
@@ -7,6 +8,10 @@ import {
   growBubble,
   shrinkBubble,
 } from "@/lib/bubbleGrid/gridLogic";
+import {
+  getBubbleCellCenter,
+  getBubbleCellPath,
+} from "@/lib/bubbleGrid/bubbleShapes";
 import { INITIAL_LAYOUT } from "@/lib/bubbleGrid/initialLayout";
 import { buildPixelMap, getCellCenter } from "@/lib/bubbleGrid/pixelMap";
 import {
@@ -17,13 +22,101 @@ import {
 } from "@/lib/bubbleGrid/types";
 
 const CELL_SIZE = 72;
-/** Grid circles use exact radius; goo circles overlap slightly so blur bridges gaps. */
 const GRID_RADIUS = CELL_SIZE / 2;
-const GOO_RADIUS = GRID_RADIUS + 4;
 const SVG_WIDTH = COLS * CELL_SIZE;
 const SVG_HEIGHT = ROWS * CELL_SIZE;
-/** Padding so Gaussian blur is not clipped by SVG or parent overflow. */
 const FILTER_PAD = 28;
+
+const GOO_FILTER_PROPS = {
+  x: "-20%",
+  y: "-20%",
+  width: "140%",
+  height: "140%",
+} as const;
+
+const cellMotion = {
+  initial: { opacity: 0, scale: 0.88 },
+  animate: { opacity: 1, scale: 1 },
+  exit: { opacity: 0, scale: 0.88 },
+  transition: { duration: 0.38, ease: [0.4, 0, 0.2, 1] as const },
+};
+
+function GooFilter({ id }: { id: string }) {
+  return (
+    <filter
+      id={id}
+      {...GOO_FILTER_PROPS}
+      colorInterpolationFilters="sRGB"
+    >
+      <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="blur" />
+      <feColorMatrix
+        in="blur"
+        mode="matrix"
+        values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 22 -10"
+        result="goo"
+      />
+      <feComposite in="SourceGraphic" in2="goo" operator="atop" />
+    </filter>
+  );
+}
+
+type BubbleLayerProps = {
+  bubbleId: BubbleId;
+  color: string;
+  cells: Array<{ col: number; row: number }>;
+  grid: Record<string, BubbleId>;
+};
+
+function BubbleLayer({ bubbleId, color, cells, grid }: BubbleLayerProps) {
+  const filterId = `goo-${bubbleId}`;
+  const viewBox = `${-FILTER_PAD} ${-FILTER_PAD} ${SVG_WIDTH + FILTER_PAD * 2} ${SVG_HEIGHT + FILTER_PAD * 2}`;
+
+  return (
+    <motion.div
+      className="pointer-events-none absolute left-0 top-0 overflow-visible"
+      style={{ width: SVG_WIDTH, height: SVG_HEIGHT }}
+      data-bubble={bubbleId}
+    >
+      <svg
+        width={SVG_WIDTH}
+        height={SVG_HEIGHT}
+        viewBox={viewBox}
+        overflow="visible"
+        className="block"
+        style={{ overflow: "visible" }}
+        aria-hidden
+      >
+        <defs>
+          <GooFilter id={filterId} />
+        </defs>
+        <g filter={`url(#${filterId})`} fill={color}>
+          <AnimatePresence mode="sync">
+            {cells.map(({ col, row }) => {
+              const center = getBubbleCellCenter(col, row, CELL_SIZE);
+              const d = getBubbleCellPath(grid, bubbleId, col, row, CELL_SIZE);
+
+              return (
+                <motion.g
+                  key={`${bubbleId}-${col}-${row}`}
+                  initial={cellMotion.initial}
+                  animate={cellMotion.animate}
+                  exit={cellMotion.exit}
+                  transition={cellMotion.transition}
+                  style={{
+                    transformOrigin: `${center.x}px ${center.y}px`,
+                    transformBox: "fill-box",
+                  }}
+                >
+                  <path d={d} />
+                </motion.g>
+              );
+            })}
+          </AnimatePresence>
+        </g>
+      </svg>
+    </motion.div>
+  );
+}
 
 export default function BubbleGrid() {
   const [grid, setGrid] = useState<Record<string, BubbleId>>(() => ({
@@ -71,7 +164,6 @@ export default function BubbleGrid() {
           style={{ width: SVG_WIDTH, height: SVG_HEIGHT, margin: FILTER_PAD }}
           aria-label="Bubble grid"
         >
-          {/* Background grid */}
           <svg
             width={SVG_WIDTH}
             height={SVG_HEIGHT}
@@ -121,72 +213,15 @@ export default function BubbleGrid() {
             )}
           </svg>
 
-          {/* One isolated goo layer per bubble */}
-          {BUBBLES.map((bubble) => {
-            const cells = pixelMap.cellsByBubble[bubble.id];
-            const filterId = `goo-${bubble.id}`;
-
-            return (
-              <div
-                key={bubble.id}
-                className="pointer-events-none absolute left-0 top-0 overflow-visible"
-                style={{ width: SVG_WIDTH, height: SVG_HEIGHT }}
-                data-bubble={bubble.id}
-              >
-                <svg
-                  width={SVG_WIDTH}
-                  height={SVG_HEIGHT}
-                  viewBox={viewBox}
-                  overflow="visible"
-                  className="block overflow-visible"
-                  style={{ overflow: "visible" }}
-                  aria-hidden
-                >
-                  <defs>
-                    <filter
-                      id={filterId}
-                      x="-20%"
-                      y="-20%"
-                      width="140%"
-                      height="140%"
-                      colorInterpolationFilters="sRGB"
-                    >
-                      <feGaussianBlur
-                        in="SourceGraphic"
-                        stdDeviation="12"
-                        result="blur"
-                      />
-                      <feColorMatrix
-                        in="blur"
-                        mode="matrix"
-                        values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 20 -9"
-                        result="goo"
-                      />
-                      <feComposite
-                        in="SourceGraphic"
-                        in2="goo"
-                        operator="atop"
-                      />
-                    </filter>
-                  </defs>
-                  <g filter={`url(#${filterId})`} fill={bubble.color}>
-                    {cells.map(({ col, row }) => {
-                      const { x, y } = getCellCenter(col, row, CELL_SIZE);
-                      return (
-                        <circle
-                          key={`${bubble.id}-${col}-${row}`}
-                          cx={x}
-                          cy={y}
-                          r={GOO_RADIUS}
-                          className="transition-[r,opacity] duration-300 ease-out"
-                        />
-                      );
-                    })}
-                  </g>
-                </svg>
-              </div>
-            );
-          })}
+          {BUBBLES.map((bubble) => (
+            <BubbleLayer
+              key={bubble.id}
+              bubbleId={bubble.id}
+              color={bubble.color}
+              cells={pixelMap.cellsByBubble[bubble.id]}
+              grid={grid}
+            />
+          ))}
         </div>
       </div>
 
