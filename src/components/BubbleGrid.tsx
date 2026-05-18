@@ -1,7 +1,12 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import { countBubbleCells, growBubble, shrinkBubble } from "@/lib/bubbleGrid/gridLogic";
+import {
+  canShrinkBubble,
+  countBubbleCells,
+  growBubble,
+  shrinkBubble,
+} from "@/lib/bubbleGrid/gridLogic";
 import { INITIAL_LAYOUT } from "@/lib/bubbleGrid/initialLayout";
 import { buildPixelMap, getCellCenter } from "@/lib/bubbleGrid/pixelMap";
 import {
@@ -161,7 +166,8 @@ export default function BubbleGrid() {
             <button
               type="button"
               onClick={() => handleShrink(bubble.id)}
-              className="flex h-7 w-7 items-center justify-center rounded-full bg-neutral-100 text-neutral-600 transition hover:bg-neutral-200 active:scale-95"
+              disabled={!canShrinkBubble(grid, bubble.id)}
+              className="flex h-7 w-7 items-center justify-center rounded-full bg-neutral-100 text-neutral-600 transition hover:bg-neutral-200 active:scale-95 disabled:opacity-40 disabled:pointer-events-none disabled:cursor-not-allowed"
               aria-label={`Decrease ${bubble.label} bubble`}
             >
               −

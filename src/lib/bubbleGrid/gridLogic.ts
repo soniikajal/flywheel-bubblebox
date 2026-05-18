@@ -1,11 +1,13 @@
 import { BubbleId, COLS, ROWS, cellKey, parseCellKey } from "./types";
 
+export const MIN_BUBBLE_CELLS = 1;
+
 const NEIGHBOR_OFFSETS = [
   [0, -1],
   [1, 0],
   [0, 1],
   [-1, 0],
-];
+] as const;
 
 export const countBubbleCells = (
   grid: Record<string, BubbleId>,
@@ -19,6 +21,49 @@ export const getBubbleCells = (
   Object.entries(grid)
     .filter(([, id]) => id === bubbleId)
     .map(([key]) => parseCellKey(key));
+
+/** True when all cells of a bubble share one connected component (4-neighbor). */
+export const isContiguous = (
+  grid: Record<string, BubbleId>,
+  bubbleId: BubbleId,
+  exclude?: { col: number; row: number }
+): boolean => {
+  let cells = getBubbleCells(grid, bubbleId);
+  if (exclude) {
+    cells = cells.filter(
+      (c) => !(c.col === exclude.col && c.row === exclude.row)
+    );
+  }
+  if (cells.length <= 1) return true;
+
+  const keys = new Set(cells.map((c) => cellKey(c.col, c.row)));
+  const visited = new Set<string>();
+  const queue = [cells[0]];
+
+  while (queue.length > 0) {
+    const { col, row } = queue.shift()!;
+    const key = cellKey(col, row);
+    if (visited.has(key)) continue;
+    visited.add(key);
+
+    for (const [dc, dr] of NEIGHBOR_OFFSETS) {
+      const nk = cellKey(col + dc, row + dr);
+      if (keys.has(nk) && !visited.has(nk)) {
+        queue.push({ col: col + dc, row: row + dr });
+      }
+    }
+  }
+
+  return visited.size === keys.size;
+};
+
+export const canShrinkBubble = (
+  grid: Record<string, BubbleId>,
+  bubbleId: BubbleId
+): boolean => {
+  if (countBubbleCells(grid, bubbleId) <= MIN_BUBBLE_CELLS) return false;
+  return shrinkBubble(grid, bubbleId) !== null;
+};
 
 const isBoundaryCell = (
   grid: Record<string, BubbleId>,
@@ -35,6 +80,11 @@ const isBoundaryCell = (
   }
   return false;
 };
+
+const compareCandidates = (
+  a: { cell: { col: number; row: number }; neighborSize: number },
+  b: { cell: { col: number; row: number }; neighborSize: number }
+) => a.cell.row - b.cell.row || a.cell.col - b.cell.col;
 
 export const growBubble = (
   grid: Record<string, BubbleId>,
@@ -62,10 +112,16 @@ export const growBubble = (
       const key = cellKey(nc, nr);
       const neighborId = grid[key];
       if (neighborId === bubbleId) continue;
+
+      const neighborSize = countBubbleCells(grid, neighborId);
+      if (neighborSize <= MIN_BUBBLE_CELLS) continue;
+
+      if (!isContiguous(grid, neighborId, { col: nc, row: nr })) continue;
+
       candidates.push({
         cell: { col: nc, row: nr },
         neighborId,
-        neighborSize: countBubbleCells(grid, neighborId),
+        neighborSize,
       });
     }
   }
@@ -73,13 +129,23 @@ export const growBubble = (
   if (candidates.length === 0) return null;
 
   const minSize = Math.min(...candidates.map((c) => c.neighborSize));
-  const eligible = candidates.filter((c) => c.neighborSize === minSize);
-  eligible.sort((a, b) => a.cell.row - b.cell.row || a.cell.col - b.cell.col);
-  const chosen = eligible[0];
+  const eligible = candidates
+    .filter((c) => c.neighborSize === minSize)
+    .sort(compareCandidates);
 
-  const next = { ...grid };
-  next[cellKey(chosen.cell.col, chosen.cell.row)] = bubbleId;
-  return next;
+  for (const chosen of eligible) {
+    const next = { ...grid };
+    next[cellKey(chosen.cell.col, chosen.cell.row)] = bubbleId;
+
+    if (
+      isContiguous(next, bubbleId) &&
+      isContiguous(next, chosen.neighborId)
+    ) {
+      return next;
+    }
+  }
+
+  return null;
 };
 
 export const shrinkBubble = (
@@ -87,7 +153,7 @@ export const shrinkBubble = (
   bubbleId: BubbleId
 ): Record<string, BubbleId> | null => {
   const cells = getBubbleCells(grid, bubbleId);
-  if (cells.length <= 1) return null;
+  if (cells.length <= MIN_BUBBLE_CELLS) return null;
 
   const boundaryCells = cells.filter(({ col, row }) =>
     isBoundaryCell(grid, col, row, bubbleId)
@@ -104,6 +170,8 @@ export const shrinkBubble = (
   const candidates: Candidate[] = [];
 
   for (const cell of boundaryCells) {
+    if (!isContiguous(grid, bubbleId, cell)) continue;
+
     const adjacentNeighbors = new Set<BubbleId>();
     for (const [dc, dr] of NEIGHBOR_OFFSETS) {
       const nc = cell.col + dc;
@@ -124,11 +192,18 @@ export const shrinkBubble = (
   if (candidates.length === 0) return null;
 
   const maxSize = Math.max(...candidates.map((c) => c.neighborSize));
-  const eligible = candidates.filter((c) => c.neighborSize === maxSize);
-  eligible.sort((a, b) => a.cell.row - b.cell.row || a.cell.col - b.cell.col);
-  const chosen = eligible[0];
+  const eligible = candidates
+    .filter((c) => c.neighborSize === maxSize)
+    .sort(compareCandidates);
 
-  const next = { ...grid };
-  next[cellKey(chosen.cell.col, chosen.cell.row)] = chosen.neighborId;
-  return next;
+  for (const chosen of eligible) {
+    const next = { ...grid };
+    next[cellKey(chosen.cell.col, chosen.cell.row)] = chosen.neighborId;
+
+    if (isContiguous(next, bubbleId) && isContiguous(next, chosen.neighborId)) {
+      return next;
+    }
+  }
+
+  return null;
 };

@@ -10,6 +10,7 @@ export const INITIAL_LAYOUT: Record<string, BubbleId> = {
   [cellKey(2, 0)]: "yellow",
   [cellKey(3, 0)]: "yellow",
   [cellKey(4, 0)]: "yellow",
+  [cellKey(4, 1)]: "yellow",
   [cellKey(1, 1)]: "yellow",
   [cellKey(2, 1)]: "yellow",
   [cellKey(3, 1)]: "yellow",
@@ -39,5 +40,4 @@ export const INITIAL_LAYOUT: Record<string, BubbleId> = {
   [cellKey(2, 6)]: "green",
   [cellKey(3, 6)]: "green",
   [cellKey(4, 6)]: "green",
-  [cellKey(4, 1)]: "green",
 };
