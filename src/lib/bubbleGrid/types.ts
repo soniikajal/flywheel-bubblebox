@@ -8,8 +8,8 @@ export type BubbleConfig = {
   label: string;
 };
 
-export const COLS = 5;
-export const ROWS = 7;
+export const COLS = 4;
+export const ROWS = 6;
 
 export const BUBBLES: BubbleConfig[] = [
   { id: "orange", color: "#FF6B35", label: "Orange" },

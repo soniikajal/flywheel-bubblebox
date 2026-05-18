@@ -25,7 +25,9 @@ const CELL_SIZE = 72;
 const GRID_RADIUS = CELL_SIZE / 2;
 const SVG_WIDTH = COLS * CELL_SIZE;
 const SVG_HEIGHT = ROWS * CELL_SIZE;
-const FILTER_PAD = 28;
+/** ViewBox bleed for goo blur — not added to layout size */
+const FILTER_BLEED = 14;
+const VIEW_BOX = `${-FILTER_BLEED} ${-FILTER_BLEED} ${SVG_WIDTH + FILTER_BLEED * 2} ${SVG_HEIGHT + FILTER_BLEED * 2}`;
 
 const GOO_FILTER_PROPS = {
   x: "-20%",
@@ -69,21 +71,16 @@ type BubbleLayerProps = {
 
 function BubbleLayer({ bubbleId, color, cells, grid }: BubbleLayerProps) {
   const filterId = `goo-${bubbleId}`;
-  const viewBox = `${-FILTER_PAD} ${-FILTER_PAD} ${SVG_WIDTH + FILTER_PAD * 2} ${SVG_HEIGHT + FILTER_PAD * 2}`;
-
   return (
-    <motion.div
-      className="pointer-events-none absolute left-0 top-0 overflow-visible"
-      style={{ width: SVG_WIDTH, height: SVG_HEIGHT }}
+    <div
+      className="pointer-events-none absolute inset-0"
       data-bubble={bubbleId}
     >
       <svg
         width={SVG_WIDTH}
         height={SVG_HEIGHT}
-        viewBox={viewBox}
-        overflow="visible"
-        className="block"
-        style={{ overflow: "visible" }}
+        viewBox={VIEW_BOX}
+        className="block h-full w-full"
         aria-hidden
       >
         <defs>
@@ -114,7 +111,7 @@ function BubbleLayer({ bubbleId, color, cells, grid }: BubbleLayerProps) {
           </AnimatePresence>
         </g>
       </svg>
-    </motion.div>
+    </div>
   );
 }
 
@@ -148,30 +145,20 @@ export default function BubbleGrid() {
     setGrid((current) => shrinkBubble(current, bubbleId) ?? current);
   }, []);
 
-  const viewBox = `${-FILTER_PAD} ${-FILTER_PAD} ${SVG_WIDTH + FILTER_PAD * 2} ${SVG_HEIGHT + FILTER_PAD * 2}`;
-
   return (
     <div className="flex flex-col items-center gap-8 p-8">
       <div
-        className="rounded-2xl bg-[#f7f4ef] p-3 shadow-inner"
-        style={{
-          width: SVG_WIDTH + FILTER_PAD * 2,
-          height: SVG_HEIGHT + FILTER_PAD * 2,
-        }}
+        className="relative overflow-hidden rounded-2xl bg-[#f7f4ef] shadow-inner"
+        style={{ width: SVG_WIDTH, height: SVG_HEIGHT }}
+        aria-label="Bubble grid"
       >
-        <div
-          className="relative"
-          style={{ width: SVG_WIDTH, height: SVG_HEIGHT, margin: FILTER_PAD }}
-          aria-label="Bubble grid"
+        <svg
+          width={SVG_WIDTH}
+          height={SVG_HEIGHT}
+          viewBox={VIEW_BOX}
+          className="block h-full w-full"
+          aria-hidden
         >
-          <svg
-            width={SVG_WIDTH}
-            height={SVG_HEIGHT}
-            viewBox={viewBox}
-            overflow="visible"
-            className="absolute left-0 top-0 block"
-            aria-hidden
-          >
             <defs>
               <pattern
                 id="gridCircles"
@@ -211,18 +198,17 @@ export default function BubbleGrid() {
                 />
               ))
             )}
-          </svg>
+        </svg>
 
-          {BUBBLES.map((bubble) => (
-            <BubbleLayer
-              key={bubble.id}
-              bubbleId={bubble.id}
-              color={bubble.color}
-              cells={pixelMap.cellsByBubble[bubble.id]}
-              grid={grid}
-            />
-          ))}
-        </div>
+        {BUBBLES.map((bubble) => (
+          <BubbleLayer
+            key={bubble.id}
+            bubbleId={bubble.id}
+            color={bubble.color}
+            cells={pixelMap.cellsByBubble[bubble.id]}
+            grid={grid}
+          />
+        ))}
       </div>
 
       <div className="flex flex-wrap justify-center gap-3 max-w-xl">
