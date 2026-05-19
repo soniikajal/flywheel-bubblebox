@@ -9,9 +9,9 @@ import {
   shrinkBubble,
 } from "@/lib/bubbleGrid/gridLogic";
 import {
-  getBubbleCellCenter,
-  getBubbleCellPath,
-} from "@/lib/bubbleGrid/bubbleShapes";
+  getBubbleCentroid,
+  getBubbleOutlinePaths,
+} from "@/lib/bubbleGrid/bubbleOutline";
 import { INITIAL_LAYOUT } from "@/lib/bubbleGrid/initialLayout";
 import { buildPixelMap, getCellCenter } from "@/lib/bubbleGrid/pixelMap";
 import {
@@ -73,6 +73,15 @@ type BubbleLayerProps = {
 
 function BubbleLayer({ bubbleId, color, cells, grid }: BubbleLayerProps) {
   const filterId = `goo-${bubbleId}`;
+  const paths = useMemo(
+    () => getBubbleOutlinePaths(grid, bubbleId, cells, CELL_SIZE),
+    [grid, bubbleId, cells]
+  );
+  const centroid = useMemo(
+    () => getBubbleCentroid(cells, CELL_SIZE),
+    [cells]
+  );
+
   return (
     <div
       className="pointer-events-none absolute inset-0"
@@ -90,26 +99,20 @@ function BubbleLayer({ bubbleId, color, cells, grid }: BubbleLayerProps) {
         </defs>
         <g filter={`url(#${filterId})`} fill={color}>
           <AnimatePresence mode="sync">
-            {cells.map(({ col, row }) => {
-              const center = getBubbleCellCenter(col, row, CELL_SIZE);
-              const d = getBubbleCellPath(grid, bubbleId, col, row, CELL_SIZE);
-
-              return (
-                <motion.g
-                  key={`${bubbleId}-${col}-${row}`}
-                  initial={cellMotion.initial}
-                  animate={cellMotion.animate}
-                  exit={cellMotion.exit}
-                  transition={cellMotion.transition}
-                  style={{
-                    transformOrigin: `${center.x}px ${center.y}px`,
-                    transformBox: "fill-box",
-                  }}
-                >
-                  <path d={d} />
-                </motion.g>
-              );
-            })}
+            {paths.map((d, i) => (
+              <motion.path
+                key={`${bubbleId}-${i}`}
+                d={d}
+                initial={cellMotion.initial}
+                animate={cellMotion.animate}
+                exit={cellMotion.exit}
+                transition={cellMotion.transition}
+                style={{
+                  transformOrigin: `${centroid.x}px ${centroid.y}px`,
+                  transformBox: "fill-box",
+                }}
+              />
+            ))}
           </AnimatePresence>
         </g>
       </svg>
