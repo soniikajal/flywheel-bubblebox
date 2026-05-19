@@ -97,10 +97,18 @@ export const getBubbleCellPath = (
   col: number,
   row: number,
   cellSize: number,
-  outerPad = 3
+  outerPad = Math.max(2, Math.round(cellSize * (3 / 36)))
 ): string => {
   const cornerRadius = Math.min(cellSize * 0.31, cellSize / 2 - 1);
-  const pads = edgePadsForCell(grid, bubbleId, col, row, outerPad);
+  const innerPad = Math.max(1, Math.round(cellSize / 24));
+  const pads = edgePadsForCell(
+    grid,
+    bubbleId,
+    col,
+    row,
+    outerPad,
+    innerPad
+  );
   const corners = cornerRadiiForCell(
     grid,
     bubbleId,

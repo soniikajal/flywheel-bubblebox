@@ -9,7 +9,7 @@ export type BubbleConfig = {
 };
 
 /** Logical grid is 4×6; each cell is subdivided for finer grow/shrink steps. */
-export const SUBDIVISION = 2;
+export const SUBDIVISION = 3;
 export const LOGICAL_COLS = 4;
 export const LOGICAL_ROWS = 6;
 export const COLS = LOGICAL_COLS * SUBDIVISION;

@@ -22,7 +22,7 @@ import {
   SUBDIVISION,
 } from "@/lib/bubbleGrid/types";
 
-const CELL_SIZE = 36;
+const CELL_SIZE = 24;
 const GRID_RADIUS = CELL_SIZE / 2;
 const SVG_WIDTH = COLS * CELL_SIZE;
 const SVG_HEIGHT = ROWS * CELL_SIZE;
