@@ -19,14 +19,16 @@ import {
   BubbleId,
   COLS,
   ROWS,
+  SUBDIVISION,
 } from "@/lib/bubbleGrid/types";
 
-const CELL_SIZE = 72;
+const CELL_SIZE = 36;
 const GRID_RADIUS = CELL_SIZE / 2;
 const SVG_WIDTH = COLS * CELL_SIZE;
 const SVG_HEIGHT = ROWS * CELL_SIZE;
+const GOO_BLUR = CELL_SIZE * (10 / 72);
 /** ViewBox bleed for goo blur — not added to layout size */
-const FILTER_BLEED = 14;
+const FILTER_BLEED = Math.ceil(GOO_BLUR + 4);
 const VIEW_BOX = `${-FILTER_BLEED} ${-FILTER_BLEED} ${SVG_WIDTH + FILTER_BLEED * 2} ${SVG_HEIGHT + FILTER_BLEED * 2}`;
 
 const GOO_FILTER_PROPS = {
@@ -43,14 +45,14 @@ const cellMotion = {
   transition: { duration: 0.38, ease: [0.4, 0, 0.2, 1] as const },
 };
 
-function GooFilter({ id }: { id: string }) {
+function GooFilter({ id, blur }: { id: string; blur: number }) {
   return (
     <filter
       id={id}
       {...GOO_FILTER_PROPS}
       colorInterpolationFilters="sRGB"
     >
-      <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="blur" />
+      <feGaussianBlur in="SourceGraphic" stdDeviation={blur} result="blur" />
       <feColorMatrix
         in="blur"
         mode="matrix"
@@ -84,7 +86,7 @@ function BubbleLayer({ bubbleId, color, cells, grid }: BubbleLayerProps) {
         aria-hidden
       >
         <defs>
-          <GooFilter id={filterId} />
+          <GooFilter id={filterId} blur={GOO_BLUR} />
         </defs>
         <g filter={`url(#${filterId})`} fill={color}>
           <AnimatePresence mode="sync">
@@ -172,7 +174,7 @@ export default function BubbleGrid() {
                   r={GRID_RADIUS}
                   fill="none"
                   stroke="#d9d2c7"
-                  strokeWidth={1}
+                  strokeWidth={0.75}
                 />
               </pattern>
             </defs>
@@ -193,8 +195,8 @@ export default function BubbleGrid() {
                   r={GRID_RADIUS}
                   fill="none"
                   stroke="#cfc6b8"
-                  strokeWidth={0.75}
-                  opacity={0.55}
+                  strokeWidth={0.5}
+                  opacity={0.45}
                 />
               ))
             )}
@@ -224,8 +226,11 @@ export default function BubbleGrid() {
             <span className="text-sm font-medium text-neutral-700 min-w-[4.5rem]">
               {bubble.label}
             </span>
-            <span className="text-xs tabular-nums text-neutral-400 w-6 text-center">
-              {cellCounts[bubble.id]}
+            <span
+              className="text-xs tabular-nums text-neutral-400 w-6 text-center"
+              title={`${cellCounts[bubble.id]} fine cells`}
+            >
+              {Math.round(cellCounts[bubble.id] / (SUBDIVISION * SUBDIVISION))}
             </span>
             <button
               type="button"

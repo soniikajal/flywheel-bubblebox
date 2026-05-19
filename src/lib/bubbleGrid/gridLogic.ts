@@ -1,6 +1,7 @@
-import { BubbleId, COLS, ROWS, cellKey, parseCellKey } from "./types";
+import { BubbleId, COLS, ROWS, SUBDIVISION, cellKey, parseCellKey } from "./types";
 
-export const MIN_BUBBLE_CELLS = 1;
+/** Minimum footprint ≈ one logical circle on the coarse grid. */
+export const MIN_BUBBLE_CELLS = SUBDIVISION * SUBDIVISION;
 
 const NEIGHBOR_OFFSETS = [
   [0, -1],

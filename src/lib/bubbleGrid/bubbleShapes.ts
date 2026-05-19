@@ -1,12 +1,17 @@
 import { BubbleId, COLS, ROWS, cellKey } from "./types";
 
-const CORNER_RADIUS = 22;
-
 type CornerRadii = {
   tl: number;
   tr: number;
   br: number;
   bl: number;
+};
+
+type EdgePads = {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
 };
 
 const variableRoundedRectPath = (
@@ -44,12 +49,13 @@ const getOwner = (
   return grid[cellKey(col, row)] ?? null;
 };
 
-/** Corner is rounded only when it lies on the blob boundary (not interior grid junction). */
+/** Corner is rounded only on the blob boundary (sharp at interior junctions). */
 const cornerRadiiForCell = (
   grid: Record<string, BubbleId>,
   bubbleId: BubbleId,
   col: number,
-  row: number
+  row: number,
+  cornerRadius: number
 ): CornerRadii => {
   const same = (c: number, r: number) => getOwner(grid, c, r) === bubbleId;
 
@@ -59,10 +65,29 @@ const cornerRadiiForCell = (
   const sameRight = same(col + 1, row);
 
   return {
-    tl: sameTop && sameLeft ? 0 : CORNER_RADIUS,
-    tr: sameTop && sameRight ? 0 : CORNER_RADIUS,
-    br: sameBottom && sameRight ? 0 : CORNER_RADIUS,
-    bl: sameBottom && sameLeft ? 0 : CORNER_RADIUS,
+    tl: sameTop && sameLeft ? 0 : cornerRadius,
+    tr: sameTop && sameRight ? 0 : cornerRadius,
+    br: sameBottom && sameRight ? 0 : cornerRadius,
+    bl: sameBottom && sameLeft ? 0 : cornerRadius,
+  };
+};
+
+/** Shared sides use tiny overlap (goo merge); exterior sides use full bleed. */
+const edgePadsForCell = (
+  grid: Record<string, BubbleId>,
+  bubbleId: BubbleId,
+  col: number,
+  row: number,
+  outerPad: number,
+  innerPad = 1
+): EdgePads => {
+  const same = (c: number, r: number) => getOwner(grid, c, r) === bubbleId;
+
+  return {
+    top: same(col, row - 1) ? innerPad : outerPad,
+    right: same(col + 1, row) ? innerPad : outerPad,
+    bottom: same(col, row + 1) ? innerPad : outerPad,
+    left: same(col - 1, row) ? innerPad : outerPad,
   };
 };
 
@@ -72,13 +97,22 @@ export const getBubbleCellPath = (
   col: number,
   row: number,
   cellSize: number,
-  pad = 3
+  outerPad = 3
 ): string => {
-  const x = col * cellSize - pad;
-  const y = row * cellSize - pad;
-  const w = cellSize + pad * 2;
-  const h = cellSize + pad * 2;
-  const corners = cornerRadiiForCell(grid, bubbleId, col, row);
+  const cornerRadius = Math.min(cellSize * 0.31, cellSize / 2 - 1);
+  const pads = edgePadsForCell(grid, bubbleId, col, row, outerPad);
+  const corners = cornerRadiiForCell(
+    grid,
+    bubbleId,
+    col,
+    row,
+    cornerRadius
+  );
+
+  const x = col * cellSize - pads.left;
+  const y = row * cellSize - pads.top;
+  const w = cellSize + pads.left + pads.right;
+  const h = cellSize + pads.top + pads.bottom;
 
   return variableRoundedRectPath(x, y, w, h, corners);
 };
