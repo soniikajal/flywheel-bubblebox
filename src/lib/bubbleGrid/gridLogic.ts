@@ -252,10 +252,8 @@ export const listShrinkCandidates = (
 
   if (candidates.length === 0) return [];
 
-  const maxSize = Math.max(...candidates.map((c) => c.neighborSize));
-  const eligible = candidates
-    .filter((c) => c.neighborSize === maxSize)
-    .sort((a, b) => {
+  const eligible = candidates.sort((a, b) => {
+    if (b.neighborSize !== a.neighborSize) return b.neighborSize - a.neighborSize;
       // Remove “tips” first (fewer same-color neighbors) so the blob stays compact when shrinking.
       const sa = adjacentSameBubbleCount(
         grid,
@@ -271,7 +269,7 @@ export const listShrinkCandidates = (
       );
       if (sa !== sb) return sa - sb;
       return a.owner.row - b.owner.row || a.owner.col - b.owner.col;
-    });
+  });
 
   const out: ShrinkCandidate[] = [];
   for (const chosen of eligible) {

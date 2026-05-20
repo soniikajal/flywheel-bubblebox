@@ -155,65 +155,40 @@ const enforceMinAndTotal = (
 };
 
 /**
- * Primary bubble gets baseline × (1 + p/100) cells; remainder split among others
- * by baseline share (matches “+100% = twice as big” on the adjusted color).
- */
-const computeCellFirstTargets = (
-  baseline: Record<string, BubbleId>,
-  offsets: BubblePercentOffsets,
-  focusId: BubbleId
-): Record<BubbleId, number> => {
-  const baselineCounts = getBaselineCellCounts(baseline);
-  const pct = offsets[focusId] ?? 0;
-  const others = BUBBLES.filter((b) => b.id !== focusId);
-  const minOthers = MIN_BUBBLE_CELLS * others.length;
-
-  const exactPrimary = baselineCounts[focusId] * (1 + pct / 100);
-  let primary = Math.floor(exactPrimary);
-  primary = Math.max(MIN_BUBBLE_CELLS, primary);
-  primary = Math.min(primary, TOTAL_CELLS - minOthers);
-
-  const remaining = TOTAL_CELLS - primary;
-  const otherBase = others.reduce((s, b) => s + baselineCounts[b.id], 0);
-
-  const weights = others.map((b) =>
-    otherBase > 0 ? baselineCounts[b.id] : 1
-  );
-  const otherTargets = apportionInteger(remaining, weights);
-
-  const merged = BUBBLES.map((b) =>
-    b.id === focusId ? primary : otherTargets[others.findIndex((o) => o.id === b.id)]!
-  );
-
-  const balanced = enforceMinAndTotal(merged, TOTAL_CELLS, MIN_BUBBLE_CELLS);
-
-  return BUBBLES.reduce(
-    (acc, { id }, i) => {
-      acc[id] = balanced[i];
-      return acc;
-    },
-    {} as Record<BubbleId, number>
-  );
-};
-
-/**
- * Zero-sum cell targets: total cells always equals grid size.
- * Uses cell-first allocation when focusId is set (UI adjusts one color at a time).
+ * Zero-sum cell targets from continuous area shares (largest-remainder apportion).
+ * Focus bubble is capped at floor(exact area) so extra growth shows as a sub-cell strip.
  */
 export const computeZeroSumTargets = (
   baseline: Record<string, BubbleId>,
   offsets: BubblePercentOffsets,
   focusId?: BubbleId
 ): Record<BubbleId, number> => {
-  if (focusId && Math.abs(offsets[focusId] ?? 0) > 0.001) {
-    return computeCellFirstTargets(baseline, offsets, focusId);
-  }
-
+  const baselineCounts = getBaselineCellCounts(baseline);
   const exact = BUBBLES.map(({ id }) =>
     getContinuousZeroSumCount(baseline, offsets, id)
   );
-  const apportioned = apportionInteger(TOTAL_CELLS, exact);
-  const balanced = enforceMinAndTotal(apportioned, TOTAL_CELLS, MIN_BUBBLE_CELLS);
+  const targets = apportionInteger(TOTAL_CELLS, exact);
+
+  if (focusId && (offsets[focusId] ?? 0) > 0.001) {
+    const fi = BUBBLES.findIndex((b) => b.id === focusId);
+    const focusExact =
+      baselineCounts[focusId] * (1 + (offsets[focusId] ?? 0) / 100);
+    const cap = Math.max(MIN_BUBBLE_CELLS, Math.floor(focusExact));
+    if (targets[fi]! > cap) {
+      let spare = targets[fi]! - cap;
+      targets[fi]! = cap;
+      const receivers = BUBBLES.map((b, i) => ({ i, w: exact[i]! }))
+        .filter((r) => r.i !== fi)
+        .sort((a, b) => b.w - a.w);
+      for (const r of receivers) {
+        if (spare <= 0) break;
+        targets[r.i]!++;
+        spare--;
+      }
+    }
+  }
+
+  const balanced = enforceMinAndTotal(targets, TOTAL_CELLS, MIN_BUBBLE_CELLS);
 
   return BUBBLES.reduce(
     (acc, { id }, i) => {
@@ -432,26 +407,64 @@ export const reconcileGridToContinuous = (
   return grid;
 };
 
+const pickGrowCandidate = (
+  grid: Record<string, BubbleId>,
+  bubbleId: BubbleId,
+  baseline: Record<string, BubbleId>,
+  offsets: BubblePercentOffsets
+): GrowCandidate | null => {
+  const candidates = listGrowCandidates(grid, bubbleId);
+  if (candidates.length === 0) return null;
+
+  return candidates
+    .map((cand) => ({
+      cand,
+      surplus:
+        countBubbleCells(grid, cand.neighborId) -
+        getContinuousZeroSumCount(baseline, offsets, cand.neighborId),
+    }))
+    .sort((a, b) => b.surplus - a.surplus)[0]!.cand;
+};
+
+const pickShrinkCandidate = (
+  grid: Record<string, BubbleId>,
+  bubbleId: BubbleId,
+  targets: Record<BubbleId, number>
+): ShrinkCandidate | null => {
+  const candidates = listShrinkCandidates(grid, bubbleId);
+  if (candidates.length === 0) return null;
+
+  const scored = candidates.map((cand) => ({
+    cand,
+    deficit:
+      targets[cand.neighborId] - countBubbleCells(grid, cand.neighborId),
+  }));
+  const needy = scored.filter((s) => s.deficit > 0);
+  const pool = needy.length > 0 ? needy : scored;
+  return pool.sort((a, b) => b.deficit - a.deficit)[0]!.cand;
+};
+
 /** Grow or shrink `bubbleId` by one cell toward its target count. */
 const stepOneBubbleTowardTarget = (
   grid: Record<string, BubbleId>,
   bubbleId: BubbleId,
-  target: number
+  target: number,
+  targets: Record<BubbleId, number>,
+  baseline: Record<string, BubbleId>,
+  offsets: BubblePercentOffsets
 ): { grid: Record<string, BubbleId>; changed: boolean } => {
   const count = countBubbleCells(grid, bubbleId);
 
   if (count < target) {
-    const candidates = listGrowCandidates(grid, bubbleId);
-    if (candidates.length === 0) return { grid, changed: false };
-    const next = applyGrowCandidate(grid, bubbleId, candidates[0]!);
-    return { grid: next, changed: true };
+    const cand = pickGrowCandidate(grid, bubbleId, baseline, offsets);
+    if (!cand) return { grid, changed: false };
+    return { grid: applyGrowCandidate(grid, bubbleId, cand), changed: true };
   }
 
   if (count > target) {
-    const candidates = listShrinkCandidates(grid, bubbleId);
-    if (candidates.length === 0) return { grid, changed: false };
-    const next = applyShrinkCandidate(grid, candidates[0]!);
-    return { grid: next, changed: true };
+    const cand = pickShrinkCandidate(grid, bubbleId, targets);
+    if (!cand) return { grid, changed: false };
+    return { grid: applyShrinkCandidate(grid, cand), changed: true };
   }
 
   return { grid, changed: false };
@@ -461,7 +474,9 @@ const stepOneBubbleTowardTarget = (
 const syncFocusBubbleFirst = (
   start: Record<string, BubbleId>,
   targets: Record<BubbleId, number>,
-  focusId: BubbleId
+  focusId: BubbleId,
+  baseline: Record<string, BubbleId>,
+  offsets: BubblePercentOffsets
 ): Record<string, BubbleId> => {
   let grid = { ...start };
   const target = targets[focusId];
@@ -471,7 +486,10 @@ const syncFocusBubbleFirst = (
     const { grid: next, changed } = stepOneBubbleTowardTarget(
       grid,
       focusId,
-      target
+      target,
+      targets,
+      baseline,
+      offsets
     );
     if (!changed) break;
     grid = next;
@@ -480,31 +498,90 @@ const syncFocusBubbleFirst = (
   return grid;
 };
 
-const syncGridToTargets = (
+/** Greedy per-bubble steps until counts match targets (or no valid move). */
+const syncAllBubblesGreedy = (
   start: Record<string, BubbleId>,
   targets: Record<BubbleId, number>,
-  focusId?: BubbleId
+  baseline: Record<string, BubbleId>,
+  offsets: BubblePercentOffsets,
+  priorityId?: BubbleId
 ): Record<string, BubbleId> => {
   if (allAtTargets(start, targets)) return start;
 
-  let current =
+  const order: BubbleId[] = priorityId
+    ? [priorityId, ...BUBBLES.map((b) => b.id).filter((id) => id !== priorityId)]
+    : BUBBLES.map((b) => b.id);
+
+  let grid = { ...start };
+
+  for (let step = 0; step < MAX_STEPS; step++) {
+    if (allAtTargets(grid, targets)) return grid;
+
+    let changed = false;
+    for (const id of order) {
+      if (countBubbleCells(grid, id) === targets[id]) continue;
+      const next = stepOneBubbleTowardTarget(
+        grid,
+        id,
+        targets[id],
+        targets,
+        baseline,
+        offsets
+      );
+      if (next.changed) {
+        grid = next.grid;
+        changed = true;
+        break;
+      }
+    }
+    if (!changed) break;
+  }
+
+  return grid;
+};
+
+const syncGridToTargets = (
+  start: Record<string, BubbleId>,
+  targets: Record<BubbleId, number>,
+  baseline: Record<string, BubbleId>,
+  offsets: BubblePercentOffsets,
+  focusId?: BubbleId
+): Record<string, BubbleId> => {
+  const afterFocus =
     focusId !== undefined
-      ? syncFocusBubbleFirst(start, targets, focusId)
-      : { ...start };
+      ? syncFocusBubbleFirst(start, targets, focusId, baseline, offsets)
+      : start;
 
-  if (allAtTargets(current, targets)) return current;
+  const greedy = syncAllBubblesGreedy(
+    afterFocus,
+    targets,
+    baseline,
+    offsets,
+    focusId
+  );
+  if (allAtTargets(greedy, targets)) return greedy;
 
-  let bestGrid = current;
-  let bestL1 = l1ToTargets(current, targets);
-  if (bestL1 === 0) return current;
+  let bestGrid = greedy;
+  let bestL1 = l1ToTargets(greedy, targets);
+  if (bestL1 === 0) return greedy;
 
-  const RESTARTS = 16;
-
+  const RESTARTS = 8;
   for (let seed = 0; seed < RESTARTS; seed++) {
-    let trial =
+    let trial = syncAllBubblesGreedy(
       focusId !== undefined
-        ? syncFocusBubbleFirst({ ...start }, targets, focusId)
-        : { ...start };
+        ? syncFocusBubbleFirst(
+            { ...start },
+            targets,
+            focusId,
+            baseline,
+            offsets
+          )
+        : { ...start },
+      targets,
+      baseline,
+      offsets,
+      focusId
+    );
 
     for (let step = 0; step < MAX_STEPS; step++) {
       const { grid, changed } = stepTowardTargets(
@@ -516,9 +593,7 @@ const syncGridToTargets = (
       if (!changed || allAtTargets(trial, targets)) break;
     }
 
-    if (allAtTargets(trial, targets)) {
-      return trial;
-    }
+    if (allAtTargets(trial, targets)) return trial;
 
     const l1 = l1ToTargets(trial, targets);
     if (l1 < bestL1) {
@@ -531,7 +606,7 @@ const syncGridToTargets = (
   return bestGrid;
 };
 
-/** Sub-cell gap vs integer targets (cell-first when focusId is set). */
+/** Sub-cell gap vs continuous zero-sum area (positive = grow strip, negative = shrink strip). */
 export const getSubCellGap = (
   grid: Record<string, BubbleId>,
   baseline: Record<string, BubbleId>,
@@ -540,15 +615,8 @@ export const getSubCellGap = (
   focusId?: BubbleId
 ): number => {
   const discrete = countBubbleCells(grid, bubbleId);
-  const target = computeZeroSumTargets(baseline, offsets, focusId)[bubbleId];
-
-  if (focusId === bubbleId) {
-    const base = countBubbleCells(baseline, bubbleId);
-    const exact = base * (1 + (offsets[bubbleId] ?? 0) / 100);
-    return exact - discrete;
-  }
-
-  return target - discrete;
+  const exact = getContinuousZeroSumCount(baseline, offsets, bubbleId);
+  return exact - discrete;
 };
 
 /** Visual cell count = discrete cells + fractional grow strip on the outline. */
@@ -576,10 +644,6 @@ export const getEffectivePercentVisual = (
   const base = countBubbleCells(baseline, bubbleId);
   if (base <= 0) return 0;
 
-  if (focusId === bubbleId && offsets[bubbleId] !== undefined) {
-    return offsets[bubbleId]!;
-  }
-
   const visual = getVisualCellCount(
     grid,
     baseline,
@@ -597,7 +661,7 @@ export const applyPercentOffsetsFromBaseline = (
   focusId?: BubbleId
 ): Record<string, BubbleId> => {
   const targets = computeZeroSumTargets(baseline, offsets, focusId);
-  return syncGridToTargets({ ...baseline }, targets, focusId);
+  return syncGridToTargets({ ...baseline }, targets, baseline, offsets, focusId);
 };
 
 /** Catch up from the current grid without resetting layout. */
@@ -608,7 +672,7 @@ export const syncGridToOffsets = (
   focusId?: BubbleId
 ): Record<string, BubbleId> => {
   const targets = computeZeroSumTargets(baseline, offsets, focusId);
-  return syncGridToTargets(current, targets, focusId);
+  return syncGridToTargets(current, targets, baseline, offsets, focusId);
 };
 
 /**
@@ -622,7 +686,7 @@ export const applyOffsetsToGrid = (
   focusId?: BubbleId
 ): Record<string, BubbleId> => {
   const targets = computeZeroSumTargets(baseline, offsets, focusId);
-  return syncGridToTargets({ ...baseline }, targets, focusId);
+  return syncGridToTargets({ ...baseline }, targets, baseline, offsets, focusId);
 };
 
 /** Exact fractional cell share from zero-sum weights (before rounding). */
@@ -632,6 +696,26 @@ export const getContinuousZeroSumCount = (
   bubbleId: BubbleId
 ): number => {
   const baselineCounts = getBaselineCellCounts(baseline);
+  const adjusted = BUBBLES.filter(
+    ({ id }) => Math.abs(offsets[id] ?? 0) > 0.001
+  );
+
+  if (adjusted.length === 0) return baselineCounts[bubbleId];
+
+  if (adjusted.length === 1) {
+    const { id: focusId } = adjusted[0]!;
+    const focusExact =
+      baselineCounts[focusId] * (1 + (offsets[focusId] ?? 0) / 100);
+    const remaining = TOTAL_CELLS - focusExact;
+    const otherBase = BUBBLES.filter((b) => b.id !== focusId).reduce(
+      (s, b) => s + baselineCounts[b.id],
+      0
+    );
+    if (bubbleId === focusId) return focusExact;
+    if (otherBase <= 0) return baselineCounts[bubbleId];
+    return (baselineCounts[bubbleId] / otherBase) * remaining;
+  }
+
   const weights = BUBBLES.map(({ id }) => {
     const percent = offsets[id] ?? 0;
     return baselineCounts[id] * (1 + percent / 100);

@@ -1,5 +1,8 @@
-import { getSubCellGap, type BubblePercentOffsets } from "./adjustments";
-import { peekNextGrow } from "./gridLogic";
+import {
+  getContinuousZeroSumCount,
+  type BubblePercentOffsets,
+} from "./adjustments";
+import { countBubbleCells, listGrowCandidates } from "./gridLogic";
 import { BubbleId, BUBBLES, COLS, ROWS, cellKey } from "./types";
 
 type Point = { x: number; y: number };
@@ -93,46 +96,92 @@ const ownerKeepRect = (
   return null;
 };
 
+const continuousGap = (
+  grid: Record<string, BubbleId>,
+  baseline: Record<string, BubbleId>,
+  offsets: BubblePercentOffsets,
+  bubbleId: BubbleId
+): number => {
+  const discrete = countBubbleCells(grid, bubbleId);
+  const exact = getContinuousZeroSumCount(baseline, offsets, bubbleId);
+  return exact - discrete;
+};
+
+/** Sub-cell grow strip when discrete cells are slightly below continuous target. */
 const fractionalGrowGap = (
   grid: Record<string, BubbleId>,
   baseline: Record<string, BubbleId>,
   offsets: BubblePercentOffsets,
   bubbleId: BubbleId,
-  focusId?: BubbleId
+  layoutFocusId?: BubbleId
 ): number => {
-  const gap = getSubCellGap(grid, baseline, offsets, bubbleId, focusId);
+  if (layoutFocusId !== undefined && bubbleId !== layoutFocusId) return 0;
+  const gap = continuousGap(grid, baseline, offsets, bubbleId);
   if (gap < 0.008 || gap >= 1 - 1e-6) return 0;
   return Math.min(gap, 1 - 1e-6);
 };
 
+type GrowMove = { owner: GridCell; target: GridCell; t: number };
+
+/** Pick grow into the neighbor most above its fair continuous share. */
+const pickFocusGrowMove = (
+  grid: Record<string, BubbleId>,
+  bubbleId: BubbleId,
+  baseline: Record<string, BubbleId>,
+  offsets: BubblePercentOffsets,
+  t: number
+): GrowMove | null => {
+  const candidates = listGrowCandidates(grid, bubbleId);
+  if (candidates.length === 0) return null;
+
+  const best = candidates
+    .map((cand) => ({
+      cand,
+      surplus:
+        countBubbleCells(grid, cand.neighborId) -
+        getContinuousZeroSumCount(baseline, offsets, cand.neighborId),
+    }))
+    .sort((a, b) => b.surplus - a.surplus)[0]!.cand;
+
+  return { owner: best.owner, target: best.target, t };
+};
+
+const getActiveGrowMove = (
+  grid: Record<string, BubbleId>,
+  baseline: Record<string, BubbleId>,
+  offsets: BubblePercentOffsets,
+  layoutFocusId?: BubbleId
+): GrowMove | null => {
+  if (!layoutFocusId) return null;
+  const t = fractionalGrowGap(
+    grid,
+    baseline,
+    offsets,
+    layoutFocusId,
+    layoutFocusId
+  );
+  if (t <= 0) return null;
+  return pickFocusGrowMove(grid, layoutFocusId, baseline, offsets, t);
+};
+
 type EdgeAdjustment = { from: GridCell; t: number };
 
-/** Other bubbles growing into our cells — shrink the same shared edge by their t. */
+/** Shrink cells the focused bubble is growing into (shared-edge coupling). */
 const neighborEdgeAdjustments = (
   grid: Record<string, BubbleId>,
   bubbleId: BubbleId,
   baseline: Record<string, BubbleId>,
   offsets: BubblePercentOffsets,
-  focusId?: BubbleId
+  layoutFocusId?: BubbleId
 ): Map<string, EdgeAdjustment> => {
   const out = new Map<string, EdgeAdjustment>();
+  const grow = getActiveGrowMove(grid, baseline, offsets, layoutFocusId);
+  if (!grow) return out;
 
-  for (const { id: otherId } of BUBBLES) {
-    if (otherId === bubbleId) continue;
+  const invaded = cellKey(grow.target.col, grow.target.row);
+  if (grid[invaded] !== bubbleId) return out;
 
-    const t = fractionalGrowGap(grid, baseline, offsets, otherId, focusId);
-    if (t <= 0) continue;
-
-    const move = peekNextGrow(grid, otherId);
-    if (!move) continue;
-
-    const invaded = cellKey(move.target.col, move.target.row);
-    if (grid[invaded] !== bubbleId) continue;
-
-    const prev = out.get(invaded);
-    if (!prev || t > prev.t) out.set(invaded, { from: move.owner, t });
-  }
-
+  out.set(invaded, { from: grow.owner, t: grow.t });
   return out;
 };
 
@@ -332,24 +381,17 @@ type FractionalPreview = {
   grow?: { owner: GridCell; target: GridCell; t: number };
 };
 
-/**
- * Sub-cell grow strip: visual area = discrete cells + gap (continuous target).
- * Only when 0 < gap < 1 (whole extra cells are handled by the grid).
- * Never shrink below owned cells (avoids white gaps).
- */
 const getFractionalPreview = (
   grid: Record<string, BubbleId>,
   bubbleId: BubbleId,
   baseline: Record<string, BubbleId>,
   offsets: BubblePercentOffsets,
-  focusId?: BubbleId
+  layoutFocusId?: BubbleId
 ): FractionalPreview | null => {
-  const t = fractionalGrowGap(grid, baseline, offsets, bubbleId, focusId);
-  if (t <= 0) return null;
-
-  const move = peekNextGrow(grid, bubbleId);
-  if (!move) return null;
-  return { grow: { ...move, t } };
+  if (layoutFocusId !== bubbleId) return null;
+  const grow = getActiveGrowMove(grid, baseline, offsets, layoutFocusId);
+  if (!grow) return null;
+  return { grow: { owner: grow.owner, target: grow.target, t: grow.t } };
 };
 
 const rectsForComponent = (
@@ -396,13 +438,19 @@ export const getBubbleOutlinePaths = (
   cellSize: number,
   baseline?: Record<string, BubbleId>,
   offsets?: BubblePercentOffsets,
-  focusId?: BubbleId
+  layoutFocusId?: BubbleId
 ): string[] => {
   if (cells.length === 0) return [];
 
   const preview =
     baseline && offsets
-      ? getFractionalPreview(grid, bubbleId, baseline, offsets, focusId)
+      ? getFractionalPreview(
+          grid,
+          bubbleId,
+          baseline,
+          offsets,
+          layoutFocusId
+        )
       : null;
 
   const edgeAdjust =
@@ -412,7 +460,7 @@ export const getBubbleOutlinePaths = (
           bubbleId,
           baseline,
           offsets,
-          focusId
+          layoutFocusId
         )
       : new Map<string, EdgeAdjustment>();
 

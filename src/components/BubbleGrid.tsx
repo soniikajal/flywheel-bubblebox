@@ -8,7 +8,6 @@ import {
   getBaselineCellCounts,
   getEffectivePercentVisual,
   parseBubbleOffsets,
-  redistributeOffsets,
 } from "@/lib/bubbleGrid/adjustments";
 import { getBubbleOutlinePaths } from "@/lib/bubbleGrid/bubbleOutline";
 import { countBubbleCells } from "@/lib/bubbleGrid/gridLogic";
@@ -57,7 +56,7 @@ type BubbleLayerProps = {
   cells: Array<{ col: number; row: number }>;
   grid: Record<string, BubbleId>;
   offsets: BubblePercentOffsets;
-  focusBubbleId: BubbleId;
+  layoutFocusId: BubbleId;
 };
 
 function BubbleLayer({
@@ -66,7 +65,7 @@ function BubbleLayer({
   cells,
   grid,
   offsets,
-  focusBubbleId,
+  layoutFocusId,
 }: BubbleLayerProps) {
   const filterId = `goo-${bubbleId}`;
   const paths = useMemo(
@@ -78,9 +77,9 @@ function BubbleLayer({
         CELL_SIZE,
         INITIAL_LAYOUT,
         offsets,
-        focusBubbleId
+        layoutFocusId
       ),
-    [bubbleId, cells, grid, offsets, focusBubbleId]
+    [bubbleId, cells, grid, offsets, layoutFocusId]
   );
   if (paths.length === 0) return null;
 
@@ -106,6 +105,57 @@ function BubbleLayer({
         </g>
       </svg>
     </div>
+  );
+}
+
+/** Rounded underlay (same geometry as goo layers) — fills gaps without square corners. */
+function CoverageUnderlay({
+  grid,
+  offsets,
+  layoutFocusId,
+  cellsByBubble,
+}: {
+  grid: Record<string, BubbleId>;
+  offsets: BubblePercentOffsets;
+  layoutFocusId: BubbleId;
+  cellsByBubble: Record<BubbleId, Array<{ col: number; row: number }>>;
+}) {
+  const layers = useMemo(
+    () =>
+      BUBBLES.map((bubble) => ({
+        id: bubble.id,
+        color: bubble.color,
+        paths: getBubbleOutlinePaths(
+          grid,
+          bubble.id,
+          cellsByBubble[bubble.id],
+          CELL_SIZE,
+          INITIAL_LAYOUT,
+          offsets,
+          layoutFocusId
+        ),
+      })).filter((l) => l.paths.length > 0),
+    [grid, offsets, layoutFocusId, cellsByBubble]
+  );
+
+  if (layers.length === 0) return null;
+
+  return (
+    <svg
+      width={SVG_WIDTH}
+      height={SVG_HEIGHT}
+      viewBox={VIEW_BOX}
+      className="pointer-events-none absolute inset-0"
+      aria-hidden
+    >
+      {layers.map((layer) => (
+        <g key={`underlay-${layer.id}`} fill={layer.color}>
+          {layer.paths.map((d, i) => (
+            <path key={`${layer.id}-${i}`} d={d} />
+          ))}
+        </g>
+      ))}
+    </svg>
   );
 }
 
@@ -185,21 +235,25 @@ export default function BubbleGrid({ adjustments }: BubbleGridProps = {}) {
   const [selectedBubbleId, setSelectedBubbleId] = useState<BubbleId>(
     BUBBLES[0]!.id
   );
+  /** Bubble used for cell-first sync on last Apply — not the dropdown selection. */
+  const [layoutFocusId, setLayoutFocusId] = useState<BubbleId>(BUBBLES[0]!.id);
   const [percentField, setPercentField] = useState("0");
 
   const applyOffsets = useCallback(
     (nextOffsets: BubblePercentOffsets, focusId?: BubbleId) => {
+      const focus = focusId ?? layoutFocusId;
       setOffsets(nextOffsets);
+      setLayoutFocusId(focus);
       setGrid(
         applyOffsetsToGrid(
           { ...INITIAL_LAYOUT },
           INITIAL_LAYOUT,
           nextOffsets,
-          focusId ?? selectedBubbleId
+          focus
         )
       );
     },
-    [selectedBubbleId]
+    [layoutFocusId]
   );
 
   const cellsByBubble = useMemo(() => {
@@ -242,14 +296,11 @@ export default function BubbleGrid({ adjustments }: BubbleGridProps = {}) {
 
     setOffsets((prev) => {
       const current = prev[selectedBubbleId] ?? 0;
-      const delta = Math.round((target - current) * 10) / 10;
-      if (Math.abs(delta) < 0.001) return prev;
-      const next = redistributeOffsets(
-        prev,
-        selectedBubbleId,
-        delta,
-        BASELINE_COUNTS
-      );
+      if (Math.abs(target - current) < 0.001) return prev;
+      const next: BubblePercentOffsets = { ...prev };
+      if (Math.abs(target) < 0.001) delete next[selectedBubbleId];
+      else next[selectedBubbleId] = target;
+      setLayoutFocusId(selectedBubbleId);
       setGrid(
         applyOffsetsToGrid(
           { ...INITIAL_LAYOUT },
@@ -298,7 +349,7 @@ export default function BubbleGrid({ adjustments }: BubbleGridProps = {}) {
       INITIAL_LAYOUT,
       offsets,
       bubbleId,
-      selectedBubbleId
+      layoutFocusId
     );
     const rounded = Math.round(pct * 10) / 10;
     if (Math.abs(rounded) < 0.05) return "0%";
@@ -313,6 +364,13 @@ export default function BubbleGrid({ adjustments }: BubbleGridProps = {}) {
         style={{ width: SVG_WIDTH, height: SVG_HEIGHT }}
         aria-label="Bubble grid"
       >
+        <CoverageUnderlay
+          grid={grid}
+          offsets={offsets}
+          layoutFocusId={layoutFocusId}
+          cellsByBubble={cellsByBubble}
+        />
+
         <ReferenceGrid />
 
         {BUBBLES.map((bubble) => (
@@ -323,7 +381,7 @@ export default function BubbleGrid({ adjustments }: BubbleGridProps = {}) {
             cells={cellsByBubble[bubble.id]}
             grid={grid}
             offsets={offsets}
-            focusBubbleId={selectedBubbleId}
+            layoutFocusId={layoutFocusId}
           />
         ))}
       </div>
