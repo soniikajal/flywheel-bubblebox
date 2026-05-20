@@ -49,9 +49,6 @@ const cellRect = (col: number, row: number, cellSize: number): Rect => {
   return { x0, y0, x1: x0 + cellSize, y1: y0 + cellSize };
 };
 
-const rectsOverlap = (a: Rect, b: Rect) =>
-  !(a.x1 <= b.x0 || a.x0 >= b.x1 || a.y1 <= b.y0 || a.y0 >= b.y1);
-
 /** Strip of `target` cell taken from the side touching `owner` (grow preview). */
 const partialGrowRect = (
   owner: GridCell,
@@ -242,29 +239,20 @@ const traceBoundaryFromRects = (rects: Rect[]): Point[] | null => {
   return simplifyOrthogonal(loop);
 };
 
-const cellFilledFromRects = (rects: Rect[], c: number, r: number, cellSize: number) => {
-  const cell = cellRect(c, r, cellSize);
-  return rects.some((rect) => rectsOverlap(rect, cell));
-};
-
-const isConvexExteriorCorner = (
-  cornerCol: number,
-  cornerRow: number,
-  filled: (c: number, r: number) => boolean
+/** Convex vertex on a CCW orthogonal loop (exterior 90° turn — gets a fillet). */
+const isConvexLoopCorner = (
+  prev: Point,
+  curr: Point,
+  next: Point
 ): boolean => {
-  const count = [
-    filled(cornerCol, cornerRow),
-    filled(cornerCol - 1, cornerRow),
-    filled(cornerCol, cornerRow - 1),
-    filled(cornerCol - 1, cornerRow - 1),
-  ].filter(Boolean).length;
-  return count === 1;
+  const ax = curr.x - prev.x;
+  const ay = curr.y - prev.y;
+  const bx = next.x - curr.x;
+  const by = next.y - curr.y;
+  if (ax === 0 && ay === 0) return false;
+  if (bx === 0 && by === 0) return false;
+  return ax * by - ay * bx > 1e-6;
 };
-
-const cornerGridCoords = (p: Point, cellSize: number) => ({
-  col: Math.round(p.x / cellSize),
-  row: Math.round(p.y / cellSize),
-});
 
 const filletPoints = (
   prev: Point,
@@ -300,9 +288,8 @@ const filletPoints = (
 
 const buildRoundedPath = (
   points: Point[],
-  cellSize: number,
-  cornerRadius: number,
-  filled: (c: number, r: number) => boolean
+  _cellSize: number,
+  cornerRadius: number
 ): string => {
   const n = points.length;
   if (n < 3) return "";
@@ -320,9 +307,8 @@ const buildRoundedPath = (
     const prev = points[(i - 1 + n) % n];
     const curr = points[i];
     const next = points[(i + 1) % n];
-    const { col, row } = cornerGridCoords(curr, cellSize);
 
-    if (isConvexExteriorCorner(col, row, filled)) {
+    if (isConvexLoopCorner(prev, curr, next)) {
       const fillet = filletPoints(prev, curr, next, cornerRadius);
       if (fillet) {
         moveOrLine(fillet.start);
@@ -477,12 +463,7 @@ export const getBubbleOutlinePaths = (
     const loop = traceBoundaryFromRects(rects);
     if (!loop) continue;
 
-    const filled = (c: number, r: number) => {
-      if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return false;
-      return cellFilledFromRects(rects, c, r, cellSize);
-    };
-
-    const d = buildRoundedPath(loop, cellSize, cornerRadius, filled);
+    const d = buildRoundedPath(loop, cellSize, cornerRadius);
     if (d) paths.push(d);
   }
 
