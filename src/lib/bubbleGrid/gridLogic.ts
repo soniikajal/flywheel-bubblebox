@@ -191,9 +191,7 @@ const findGrowCandidate = (
   bubbleId: BubbleId
 ): GrowCandidate | null => {
   const list = listGrowCandidates(grid, bubbleId);
-  if (list.length === 0) return null;
-  const idx = countBubbleCells(grid, bubbleId) % list.length;
-  return list[idx];
+  return list[0] ?? null;
 };
 
 export type ShrinkCandidate = {
@@ -296,9 +294,7 @@ const findShrinkCandidate = (
   bubbleId: BubbleId
 ): ShrinkCandidate | null => {
   const list = listShrinkCandidates(grid, bubbleId);
-  if (list.length === 0) return null;
-  const idx = countBubbleCells(grid, bubbleId) % list.length;
-  return list[idx];
+  return list[0] ?? null;
 };
 
 /** Next cell this bubble would take on grow (for fractional edge preview). */
