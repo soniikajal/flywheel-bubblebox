@@ -1,4 +1,6 @@
-import { BubbleId, COLS, ROWS, SUBDIVISION, cellKey } from "./types";
+import { BubbleId, COLS, ROWS, cellKey } from "./types";
+
+import type { BubblePercentOffsets } from "./adjustments";
 
 type Point = { x: number; y: number };
 
@@ -220,7 +222,9 @@ export const getBubbleOutlinePaths = (
   grid: Record<string, BubbleId>,
   bubbleId: BubbleId,
   cells: Array<{ col: number; row: number }>,
-  cellSize: number
+  cellSize: number,
+  _baseline?: Record<string, BubbleId>,
+  _offsets?: BubblePercentOffsets
 ): string[] => {
   if (cells.length === 0) return [];
 
@@ -229,15 +233,12 @@ export const getBubbleOutlinePaths = (
     return grid[cellKey(c, r)] === bubbleId;
   };
 
-  const cornerRadius = Math.min(
-    cellSize * SUBDIVISION * 0.31,
-    cellSize * SUBDIVISION * 0.5 - 1
-  );
+  const cornerRadius = Math.min(cellSize * 0.31, cellSize * 0.5 - 1);
 
   const paths: string[] = [];
 
   for (const component of splitConnectedComponents(cells)) {
-    const loop = traceBoundaryLoop(component, cellSize);
+    let loop = traceBoundaryLoop(component, cellSize);
     if (!loop) continue;
 
     const d = buildRoundedPath(loop, cellSize, cornerRadius, filled);

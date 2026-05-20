@@ -7,7 +7,6 @@ export default function Home() {
         <h1 className="text-2xl font-semibold text-neutral-800 tracking-tight">
           Bubble Grid
         </h1>
-        
       </div>
       <BubbleGrid />
     </main>

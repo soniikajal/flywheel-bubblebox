@@ -1,7 +1,6 @@
-import { BubbleId, COLS, ROWS, SUBDIVISION, cellKey, parseCellKey } from "./types";
+import { BubbleId, COLS, ROWS, cellKey, parseCellKey } from "./types";
 
-/** Minimum footprint ≈ one logical circle on the coarse grid. */
-export const MIN_BUBBLE_CELLS = SUBDIVISION * SUBDIVISION;
+export const MIN_BUBBLE_CELLS = 1;
 
 const NEIGHBOR_OFFSETS = [
   [0, -1],
@@ -82,36 +81,56 @@ const isBoundaryCell = (
   return false;
 };
 
-const compareCandidates = (
-  a: { cell: { col: number; row: number }; neighborSize: number },
-  b: { cell: { col: number; row: number }; neighborSize: number }
-) => a.cell.row - b.cell.row || a.cell.col - b.cell.col;
+export type GridCell = { col: number; row: number };
 
-export const growBubble = (
+export type GrowCandidate = {
+  owner: GridCell;
+  target: GridCell;
+  neighborId: BubbleId;
+};
+
+const adjacentSameBubbleCount = (
+  grid: Record<string, BubbleId>,
+  col: number,
+  row: number,
+  bubbleId: BubbleId
+): number => {
+  let n = 0;
+  for (const [dc, dr] of NEIGHBOR_OFFSETS) {
+    const nc = col + dc;
+    const nr = row + dr;
+    if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) continue;
+    if (grid[cellKey(nc, nr)] === bubbleId) n++;
+  }
+  return n;
+};
+
+/** All valid one-cell expansion moves, stable sort — rotation picks among these. */
+export const listGrowCandidates = (
   grid: Record<string, BubbleId>,
   bubbleId: BubbleId
-): Record<string, BubbleId> | null => {
+): GrowCandidate[] => {
   const boundaryCells = getBubbleCells(grid, bubbleId).filter(({ col, row }) =>
     isBoundaryCell(grid, col, row, bubbleId)
   );
 
-  if (boundaryCells.length === 0) return null;
+  if (boundaryCells.length === 0) return [];
 
   type Candidate = {
-    cell: { col: number; row: number };
+    owner: GridCell;
+    target: GridCell;
     neighborId: BubbleId;
     neighborSize: number;
   };
 
   const candidates: Candidate[] = [];
 
-  for (const cell of boundaryCells) {
+  for (const owner of boundaryCells) {
     for (const [dc, dr] of NEIGHBOR_OFFSETS) {
-      const nc = cell.col + dc;
-      const nr = cell.row + dr;
+      const nc = owner.col + dc;
+      const nr = owner.row + dr;
       if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) continue;
-      const key = cellKey(nc, nr);
-      const neighborId = grid[key];
+      const neighborId = grid[cellKey(nc, nr)];
       if (neighborId === bubbleId) continue;
 
       const neighborSize = countBubbleCells(grid, neighborId);
@@ -120,91 +139,231 @@ export const growBubble = (
       if (!isContiguous(grid, neighborId, { col: nc, row: nr })) continue;
 
       candidates.push({
-        cell: { col: nc, row: nr },
+        owner,
+        target: { col: nc, row: nr },
         neighborId,
         neighborSize,
       });
     }
   }
 
-  if (candidates.length === 0) return null;
+  if (candidates.length === 0) return [];
 
   const minSize = Math.min(...candidates.map((c) => c.neighborSize));
   const eligible = candidates
     .filter((c) => c.neighborSize === minSize)
-    .sort(compareCandidates);
+    .sort((a, b) => {
+      // Prefer cells that touch more of the growing blob — fewer “notches” and diagonal-looking bites.
+      const ta = adjacentSameBubbleCount(
+        grid,
+        a.target.col,
+        a.target.row,
+        bubbleId
+      );
+      const tb = adjacentSameBubbleCount(
+        grid,
+        b.target.col,
+        b.target.row,
+        bubbleId
+      );
+      if (tb !== ta) return tb - ta;
+      return a.target.row - b.target.row || a.target.col - b.target.col;
+    });
 
+  const out: GrowCandidate[] = [];
   for (const chosen of eligible) {
     const next = { ...grid };
-    next[cellKey(chosen.cell.col, chosen.cell.row)] = bubbleId;
-
-    if (
-      isContiguous(next, bubbleId) &&
-      isContiguous(next, chosen.neighborId)
-    ) {
-      return next;
+    next[cellKey(chosen.target.col, chosen.target.row)] = bubbleId;
+    if (isContiguous(next, bubbleId) && isContiguous(next, chosen.neighborId)) {
+      out.push({
+        owner: chosen.owner,
+        target: chosen.target,
+        neighborId: chosen.neighborId,
+      });
     }
   }
 
-  return null;
+  return out;
 };
 
-export const shrinkBubble = (
+const findGrowCandidate = (
   grid: Record<string, BubbleId>,
   bubbleId: BubbleId
-): Record<string, BubbleId> | null => {
+): GrowCandidate | null => {
+  const list = listGrowCandidates(grid, bubbleId);
+  if (list.length === 0) return null;
+  const idx = countBubbleCells(grid, bubbleId) % list.length;
+  return list[idx];
+};
+
+export type ShrinkCandidate = {
+  owner: GridCell;
+  target: GridCell;
+  neighborId: BubbleId;
+};
+
+/** All valid one-cell contraction moves — rotation picks among these. */
+export const listShrinkCandidates = (
+  grid: Record<string, BubbleId>,
+  bubbleId: BubbleId
+): ShrinkCandidate[] => {
   const cells = getBubbleCells(grid, bubbleId);
-  if (cells.length <= MIN_BUBBLE_CELLS) return null;
+  if (cells.length <= MIN_BUBBLE_CELLS) return [];
 
   const boundaryCells = cells.filter(({ col, row }) =>
     isBoundaryCell(grid, col, row, bubbleId)
   );
 
-  if (boundaryCells.length === 0) return null;
+  if (boundaryCells.length === 0) return [];
 
   type Candidate = {
-    cell: { col: number; row: number };
+    owner: GridCell;
+    target: GridCell;
     neighborId: BubbleId;
     neighborSize: number;
   };
 
   const candidates: Candidate[] = [];
 
-  for (const cell of boundaryCells) {
-    if (!isContiguous(grid, bubbleId, cell)) continue;
+  for (const owner of boundaryCells) {
+    if (!isContiguous(grid, bubbleId, owner)) continue;
 
     const adjacentNeighbors = new Set<BubbleId>();
     for (const [dc, dr] of NEIGHBOR_OFFSETS) {
-      const nc = cell.col + dc;
-      const nr = cell.row + dr;
+      const nc = owner.col + dc;
+      const nr = owner.row + dr;
       if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) continue;
       const neighborId = grid[cellKey(nc, nr)];
       if (neighborId !== bubbleId) adjacentNeighbors.add(neighborId);
     }
+
     for (const neighborId of Array.from(adjacentNeighbors)) {
-      candidates.push({
-        cell,
-        neighborId,
-        neighborSize: countBubbleCells(grid, neighborId),
-      });
+      for (const [dc, dr] of NEIGHBOR_OFFSETS) {
+        const nc = owner.col + dc;
+        const nr = owner.row + dr;
+        if (grid[cellKey(nc, nr)] !== neighborId) continue;
+        candidates.push({
+          owner,
+          target: { col: nc, row: nr },
+          neighborId,
+          neighborSize: countBubbleCells(grid, neighborId),
+        });
+      }
     }
   }
 
-  if (candidates.length === 0) return null;
+  if (candidates.length === 0) return [];
 
   const maxSize = Math.max(...candidates.map((c) => c.neighborSize));
   const eligible = candidates
     .filter((c) => c.neighborSize === maxSize)
-    .sort(compareCandidates);
+    .sort((a, b) => {
+      // Remove “tips” first (fewer same-color neighbors) so the blob stays compact when shrinking.
+      const sa = adjacentSameBubbleCount(
+        grid,
+        a.owner.col,
+        a.owner.row,
+        bubbleId
+      );
+      const sb = adjacentSameBubbleCount(
+        grid,
+        b.owner.col,
+        b.owner.row,
+        bubbleId
+      );
+      if (sa !== sb) return sa - sb;
+      return a.owner.row - b.owner.row || a.owner.col - b.owner.col;
+    });
 
+  const out: ShrinkCandidate[] = [];
   for (const chosen of eligible) {
     const next = { ...grid };
-    next[cellKey(chosen.cell.col, chosen.cell.row)] = chosen.neighborId;
-
+    next[cellKey(chosen.owner.col, chosen.owner.row)] = chosen.neighborId;
     if (isContiguous(next, bubbleId) && isContiguous(next, chosen.neighborId)) {
-      return next;
+      out.push({
+        owner: chosen.owner,
+        target: chosen.target,
+        neighborId: chosen.neighborId,
+      });
     }
   }
 
+  return out;
+};
+
+const findShrinkCandidate = (
+  grid: Record<string, BubbleId>,
+  bubbleId: BubbleId
+): ShrinkCandidate | null => {
+  const list = listShrinkCandidates(grid, bubbleId);
+  if (list.length === 0) return null;
+  const idx = countBubbleCells(grid, bubbleId) % list.length;
+  return list[idx];
+};
+
+/** Next cell this bubble would take on grow (for fractional edge preview). */
+export const peekNextGrow = (
+  grid: Record<string, BubbleId>,
+  bubbleId: BubbleId
+): { owner: GridCell; target: GridCell } | null => {
+  const c = findGrowCandidate(grid, bubbleId);
+  return c ? { owner: c.owner, target: c.target } : null;
+};
+
+/** Next cell this bubble would lose on shrink (for fractional edge preview). */
+export const peekNextShrink = (
+  grid: Record<string, BubbleId>,
+  bubbleId: BubbleId
+): { owner: GridCell; target: GridCell } | null => {
+  const c = findShrinkCandidate(grid, bubbleId);
+  return c ? { owner: c.owner, target: c.target } : null;
+};
+
+export const peekNextShrinkWithReceiver = (
+  grid: Record<string, BubbleId>,
+  bubbleId: BubbleId
+): { owner: GridCell; target: GridCell; receiverId: BubbleId } | null => {
+  const c = findShrinkCandidate(grid, bubbleId);
+  return c
+    ? { owner: c.owner, target: c.target, receiverId: c.neighborId }
+    : null;
+};
+
+/** Our cell that shares an edge with `cell` (for complementary boundary motion). */
+export const findAdjacentOwnedCell = (
+  grid: Record<string, BubbleId>,
+  bubbleId: BubbleId,
+  cell: GridCell
+): GridCell | null => {
+  for (const [dc, dr] of NEIGHBOR_OFFSETS) {
+    const nc = cell.col + dc;
+    const nr = cell.row + dr;
+    if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) continue;
+    if (grid[cellKey(nc, nr)] === bubbleId) return { col: nc, row: nr };
+  }
   return null;
+};
+
+export const growBubble = (
+  grid: Record<string, BubbleId>,
+  bubbleId: BubbleId
+): Record<string, BubbleId> | null => {
+  const chosen = findGrowCandidate(grid, bubbleId);
+  if (!chosen) return null;
+
+  const next = { ...grid };
+  next[cellKey(chosen.target.col, chosen.target.row)] = bubbleId;
+  return next;
+};
+
+export const shrinkBubble = (
+  grid: Record<string, BubbleId>,
+  bubbleId: BubbleId
+): Record<string, BubbleId> | null => {
+  const chosen = findShrinkCandidate(grid, bubbleId);
+  if (!chosen) return null;
+
+  const next = { ...grid };
+  next[cellKey(chosen.owner.col, chosen.owner.row)] = chosen.neighborId;
+  return next;
 };

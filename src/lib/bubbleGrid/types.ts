@@ -8,12 +8,8 @@ export type BubbleConfig = {
   label: string;
 };
 
-/** Logical grid is 4×6; each cell is subdivided for finer grow/shrink steps. */
-export const SUBDIVISION = 3;
-export const LOGICAL_COLS = 4;
-export const LOGICAL_ROWS = 6;
-export const COLS = LOGICAL_COLS * SUBDIVISION;
-export const ROWS = LOGICAL_ROWS * SUBDIVISION;
+export const COLS = 4;
+export const ROWS = 6;
 
 export const BUBBLES: BubbleConfig[] = [
   { id: "orange", color: "#FF6B35", label: "Orange" },
