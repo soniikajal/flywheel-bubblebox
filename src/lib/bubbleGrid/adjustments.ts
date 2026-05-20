@@ -110,7 +110,7 @@ const apportionInteger = (total: number, weights: number[]): number[] => {
 
   const exact = weights.map((w) => (w / sum) * total);
   const floors = exact.map((e) => Math.floor(e));
-  let remaining = total - floors.reduce((a, b) => a + b, 0);
+  const remaining = total - floors.reduce((a, b) => a + b, 0);
   const order = exact
     .map((e, i) => ({ i, remainder: e - floors[i] }))
     .sort((a, b) => b.remainder - a.remainder);
@@ -433,11 +433,8 @@ const syncGridToTargets = (
 export const applyPercentOffsetsFromBaseline = (
   baseline: Record<string, BubbleId>,
   offsets: BubblePercentOffsets
-): Record<string, BubbleId> => {
-  const targets = computeZeroSumTargets(baseline, offsets);
-  const grid = syncGridToTargets({ ...baseline }, targets);
-  return reconcileGridToContinuous(grid, baseline, offsets);
-};
+): Record<string, BubbleId> =>
+  reconcileGridToContinuous({ ...baseline }, baseline, offsets);
 
 /** Catch up from the current grid without resetting layout. */
 export const syncGridToOffsets = (
@@ -450,18 +447,15 @@ export const syncGridToOffsets = (
 };
 
 /**
- * Apply percent offsets to the current grid: discrete sync toward rounded targets,
- * then reconcile against continuous zero-sum shares so geometry can still move when
- * integer targets are unreachable (contiguity).
+ * Apply percent offsets: move the discrete grid only in whole-cell steps when
+ * continuous zero-sum share differs by ≥1 cell. Sub-cell changes are outline-only.
  */
 export const applyOffsetsToGrid = (
   current: Record<string, BubbleId>,
   baseline: Record<string, BubbleId>,
   offsets: BubblePercentOffsets
-): Record<string, BubbleId> => {
-  const synced = syncGridToOffsets(current, baseline, offsets);
-  return reconcileGridToContinuous(synced, baseline, offsets);
-};
+): Record<string, BubbleId> =>
+  reconcileGridToContinuous(current, baseline, offsets);
 
 /** Exact fractional cell share from zero-sum weights (before rounding). */
 export const getContinuousZeroSumCount = (

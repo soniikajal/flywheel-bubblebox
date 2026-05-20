@@ -6,7 +6,7 @@ import {
   applyPercentOffsetsFromBaseline,
   type BubblePercentOffsets,
   getBaselineCellCounts,
-  getEffectivePercent,
+  getContinuousZeroSumCount,
   parseBubbleOffsets,
   redistributeOffsets,
 } from "@/lib/bubbleGrid/adjustments";
@@ -77,7 +77,7 @@ function BubbleLayer({
         INITIAL_LAYOUT,
         offsets
       ),
-    [grid, bubbleId, cells, offsets]
+    [bubbleId, cells, grid, offsets]
   );
   if (paths.length === 0) return null;
 
@@ -275,7 +275,13 @@ export default function BubbleGrid({ adjustments }: BubbleGridProps = {}) {
   };
 
   const formatEffectivePercent = (bubbleId: BubbleId) => {
-    const pct = getEffectivePercent(grid, INITIAL_LAYOUT, bubbleId);
+    const base = BASELINE_COUNTS[bubbleId];
+    const continuous = getContinuousZeroSumCount(
+      INITIAL_LAYOUT,
+      offsets,
+      bubbleId
+    );
+    const pct = base > 0 ? ((continuous / base) - 1) * 100 : 0;
     const rounded = Math.round(pct * 10) / 10;
     if (Math.abs(rounded) < 0.05) return "0%";
     const s = Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);

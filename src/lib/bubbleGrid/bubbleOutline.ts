@@ -1,8 +1,13 @@
+import {
+  getContinuousZeroSumCount,
+  type BubblePercentOffsets,
+} from "./adjustments";
+import { countBubbleCells, peekNextGrow } from "./gridLogic";
 import { BubbleId, COLS, ROWS, cellKey } from "./types";
 
-import type { BubblePercentOffsets } from "./adjustments";
-
 type Point = { x: number; y: number };
+type GridCell = { col: number; row: number };
+type Rect = { x0: number; y0: number; x1: number; y1: number };
 
 const ptKey = (p: Point) => `${p.x},${p.y}`;
 
@@ -38,7 +43,99 @@ const signedArea = (points: Point[]) => {
   return sum / 2;
 };
 
-/** Convex exterior corner of a rectilinear blob (one filled quadrant at grid corner). */
+const cellRect = (col: number, row: number, cellSize: number): Rect => {
+  const x0 = col * cellSize;
+  const y0 = row * cellSize;
+  return { x0, y0, x1: x0 + cellSize, y1: y0 + cellSize };
+};
+
+const rectsOverlap = (a: Rect, b: Rect) =>
+  !(a.x1 <= b.x0 || a.x0 >= b.x1 || a.y1 <= b.y0 || a.y0 >= b.y1);
+
+/** Strip of `target` cell taken from the side touching `owner` (grow preview). */
+const partialGrowRect = (
+  owner: GridCell,
+  target: GridCell,
+  t: number,
+  cellSize: number
+): Rect | null => {
+  const dc = target.col - owner.col;
+  const dr = target.row - owner.row;
+  const x0 = target.col * cellSize;
+  const y0 = target.row * cellSize;
+  const x1 = x0 + cellSize;
+  const y1 = y0 + cellSize;
+  const d = t * cellSize;
+
+  if (dc === 1) return { x0, y0, x1: x0 + d, y1 };
+  if (dc === -1) return { x0: x1 - d, y0, x1, y1 };
+  if (dr === 1) return { x0, y0, x1, y1: y0 + d };
+  if (dr === -1) return { x0, y0: y1 - d, x1, y1 };
+  return null;
+};
+
+const edgeKey = (a: Point, b: Point) => {
+  const ak = ptKey(a);
+  const bk = ptKey(b);
+  return ak < bk ? `${ak}|${bk}` : `${bk}|${ak}`;
+};
+
+/** Exterior loop of a union of axis-aligned rectangles (orthogonal only). */
+const traceBoundaryFromRects = (rects: Rect[]): Point[] | null => {
+  if (rects.length === 0) return null;
+
+  const edgeCount = new Map<string, number>();
+  const edgeEnds = new Map<string, [Point, Point]>();
+
+  for (const rect of rects) {
+    const tl: Point = { x: rect.x0, y: rect.y0 };
+    const tr: Point = { x: rect.x1, y: rect.y0 };
+    const br: Point = { x: rect.x1, y: rect.y1 };
+    const bl: Point = { x: rect.x0, y: rect.y1 };
+    const corners = [tl, tr, br, bl];
+
+    for (let i = 0; i < 4; i++) {
+      const a = corners[i]!;
+      const b = corners[(i + 1) % 4]!;
+      const k = edgeKey(a, b);
+      edgeCount.set(k, (edgeCount.get(k) ?? 0) + 1);
+      edgeEnds.set(k, [a, b]);
+    }
+  }
+
+  const next = new Map<string, Point>();
+  for (const [k, n] of edgeCount) {
+    if (n !== 1) continue;
+    const [a, b] = edgeEnds.get(k)!;
+    const fk = ptKey(a);
+    if (!next.has(fk)) next.set(fk, b);
+  }
+
+  if (next.size === 0) return null;
+
+  const startKey = next.keys().next().value!;
+  const loop: Point[] = [];
+  let current = startKey;
+
+  for (let i = 0; i <= next.size; i++) {
+    loop.push(parseKey(current));
+    const n = next.get(current);
+    if (!n) break;
+    const nk = ptKey(n);
+    if (nk === startKey && loop.length > 2) break;
+    current = nk;
+  }
+
+  if (loop.length < 3) return null;
+  if (signedArea(loop) < 0) loop.reverse();
+  return simplifyOrthogonal(loop);
+};
+
+const cellFilledFromRects = (rects: Rect[], c: number, r: number, cellSize: number) => {
+  const cell = cellRect(c, r, cellSize);
+  return rects.some((rect) => rectsOverlap(rect, cell));
+};
+
 const isConvexExteriorCorner = (
   cornerCol: number,
   cornerRow: number,
@@ -133,55 +230,6 @@ const buildRoundedPath = (
   return parts.join(" ");
 };
 
-/** Trace clockwise exterior boundary of a cell set. */
-const traceBoundaryLoop = (
-  cells: Set<string>,
-  cellSize: number
-): Point[] | null => {
-  const next = new Map<string, Point>();
-
-  const addEdge = (from: Point, to: Point) => {
-    const fk = ptKey(from);
-    if (next.has(fk)) return;
-    next.set(fk, to);
-  };
-
-  const has = (c: number, r: number) => cells.has(cellKey(c, r));
-
-  for (const key of Array.from(cells)) {
-    const [col, row] = key.split(",").map(Number);
-    const x0 = col * cellSize;
-    const y0 = row * cellSize;
-    const x1 = x0 + cellSize;
-    const y1 = y0 + cellSize;
-
-    if (!has(col, row - 1)) addEdge({ x: x0, y: y0 }, { x: x1, y: y0 });
-    if (!has(col + 1, row)) addEdge({ x: x1, y: y0 }, { x: x1, y: y1 });
-    if (!has(col, row + 1)) addEdge({ x: x1, y: y1 }, { x: x0, y: y1 });
-    if (!has(col - 1, row)) addEdge({ x: x0, y: y1 }, { x: x0, y: y0 });
-  }
-
-  if (next.size === 0) return null;
-
-  const startKey = next.keys().next().value!;
-  const loop: Point[] = [];
-  let current = startKey;
-
-  for (let i = 0; i <= next.size; i++) {
-    loop.push(parseKey(current));
-    const n = next.get(current);
-    if (!n) break;
-    const nk = ptKey(n);
-    if (nk === startKey && loop.length > 2) break;
-    current = nk;
-  }
-
-  if (loop.length < 3) return null;
-
-  if (signedArea(loop) < 0) loop.reverse();
-  return simplifyOrthogonal(loop);
-};
-
 const splitConnectedComponents = (
   cells: Array<{ col: number; row: number }>
 ): Array<Set<string>> => {
@@ -218,28 +266,84 @@ const splitConnectedComponents = (
   return components;
 };
 
+type FractionalPreview = {
+  grow?: { owner: GridCell; target: GridCell; t: number };
+};
+
+/**
+ * Sub-cell grow strip: visual area = discrete cells + gap (continuous target).
+ * Only when 0 < gap < 1 (whole extra cells are handled by the grid).
+ * Never shrink below owned cells (avoids white gaps).
+ */
+const getFractionalPreview = (
+  grid: Record<string, BubbleId>,
+  bubbleId: BubbleId,
+  baseline: Record<string, BubbleId>,
+  offsets: BubblePercentOffsets
+): FractionalPreview | null => {
+  const gap =
+    getContinuousZeroSumCount(baseline, offsets, bubbleId) -
+    countBubbleCells(grid, bubbleId);
+
+  if (gap < 0.008 || gap >= 1 - 1e-6) return null;
+
+  const move = peekNextGrow(grid, bubbleId);
+  if (!move) return null;
+  return { grow: { ...move, t: Math.min(gap, 1 - 1e-6) } };
+};
+
+const rectsForComponent = (
+  component: Set<string>,
+  cellSize: number,
+  preview: FractionalPreview | null
+): Rect[] => {
+  const rects: Rect[] = [];
+
+  for (const key of component) {
+    const [col, row] = key.split(",").map(Number);
+    rects.push(cellRect(col, row, cellSize));
+  }
+
+  if (preview?.grow) {
+    const strip = partialGrowRect(
+      preview.grow.owner,
+      preview.grow.target,
+      preview.grow.t,
+      cellSize
+    );
+    if (strip) rects.push(strip);
+  }
+
+  return rects;
+};
+
 export const getBubbleOutlinePaths = (
   grid: Record<string, BubbleId>,
   bubbleId: BubbleId,
   cells: Array<{ col: number; row: number }>,
   cellSize: number,
-  _baseline?: Record<string, BubbleId>,
-  _offsets?: BubblePercentOffsets
+  baseline?: Record<string, BubbleId>,
+  offsets?: BubblePercentOffsets
 ): string[] => {
   if (cells.length === 0) return [];
 
-  const filled = (c: number, r: number) => {
-    if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return false;
-    return grid[cellKey(c, r)] === bubbleId;
-  };
+  const preview =
+    baseline && offsets
+      ? getFractionalPreview(grid, bubbleId, baseline, offsets)
+      : null;
 
   const cornerRadius = Math.min(cellSize * 0.31, cellSize * 0.5 - 1);
-
   const paths: string[] = [];
 
   for (const component of splitConnectedComponents(cells)) {
-    let loop = traceBoundaryLoop(component, cellSize);
+    const rects = rectsForComponent(component, cellSize, preview);
+    const loop = traceBoundaryFromRects(rects);
     if (!loop) continue;
+
+    const filled = (c: number, r: number) => {
+      if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return false;
+      return cellFilledFromRects(rects, c, r, cellSize);
+    };
 
     const d = buildRoundedPath(loop, cellSize, cornerRadius, filled);
     if (d) paths.push(d);
