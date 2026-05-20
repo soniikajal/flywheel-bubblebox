@@ -186,9 +186,7 @@ export default function BubbleGrid({ adjustments }: BubbleGridProps = {}) {
 
   const applyOffsets = useCallback((nextOffsets: BubblePercentOffsets) => {
     setOffsets(nextOffsets);
-    setGrid((current) =>
-      applyOffsetsToGrid(current, INITIAL_LAYOUT, nextOffsets)
-    );
+    setGrid(applyOffsetsToGrid({ ...INITIAL_LAYOUT }, INITIAL_LAYOUT, nextOffsets));
   }, []);
 
   const cellsByBubble = useMemo(() => {
@@ -239,7 +237,7 @@ export default function BubbleGrid({ adjustments }: BubbleGridProps = {}) {
         delta,
         BASELINE_COUNTS
       );
-      setGrid((g) => applyOffsetsToGrid(g, INITIAL_LAYOUT, next));
+      setGrid(applyOffsetsToGrid({ ...INITIAL_LAYOUT }, INITIAL_LAYOUT, next));
       return next;
     });
     setPercentField(

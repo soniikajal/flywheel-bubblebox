@@ -3,7 +3,7 @@ import {
   type BubblePercentOffsets,
 } from "./adjustments";
 import { countBubbleCells, peekNextGrow } from "./gridLogic";
-import { BubbleId, COLS, ROWS, cellKey } from "./types";
+import { BubbleId, BUBBLES, COLS, ROWS, cellKey } from "./types";
 
 type Point = { x: number; y: number };
 type GridCell = { col: number; row: number };
@@ -72,6 +72,71 @@ const partialGrowRect = (
   if (dr === 1) return { x0, y0, x1, y1: y0 + d };
   if (dr === -1) return { x0, y0: y1 - d, x1, y1 };
   return null;
+};
+
+/** `owner` minus the strip that partialGrowRect(from, owner, t) would add (shared-edge shrink). */
+const ownerKeepRect = (
+  owner: GridCell,
+  from: GridCell,
+  t: number,
+  cellSize: number
+): Rect | null => {
+  const dc = owner.col - from.col;
+  const dr = owner.row - from.row;
+  const x0 = owner.col * cellSize;
+  const y0 = owner.row * cellSize;
+  const x1 = x0 + cellSize;
+  const y1 = y0 + cellSize;
+  const d = t * cellSize;
+
+  if (dc === 1) return { x0: x0 + d, y0, x1, y1 };
+  if (dc === -1) return { x0, y0, x1: x1 - d, y1 };
+  if (dr === 1) return { x0, y0: y0 + d, x1, y1 };
+  if (dr === -1) return { x0, y0, x1, y1: y1 - d };
+  return null;
+};
+
+const fractionalGrowGap = (
+  grid: Record<string, BubbleId>,
+  baseline: Record<string, BubbleId>,
+  offsets: BubblePercentOffsets,
+  bubbleId: BubbleId
+): number => {
+  const gap =
+    getContinuousZeroSumCount(baseline, offsets, bubbleId) -
+    countBubbleCells(grid, bubbleId);
+  if (gap < 0.008 || gap >= 1 - 1e-6) return 0;
+  return Math.min(gap, 1 - 1e-6);
+};
+
+type EdgeAdjustment = { from: GridCell; t: number };
+
+/** Other bubbles growing into our cells — shrink the same shared edge by their t. */
+const neighborEdgeAdjustments = (
+  grid: Record<string, BubbleId>,
+  bubbleId: BubbleId,
+  baseline: Record<string, BubbleId>,
+  offsets: BubblePercentOffsets
+): Map<string, EdgeAdjustment> => {
+  const out = new Map<string, EdgeAdjustment>();
+
+  for (const { id: otherId } of BUBBLES) {
+    if (otherId === bubbleId) continue;
+
+    const t = fractionalGrowGap(grid, baseline, offsets, otherId);
+    if (t <= 0) continue;
+
+    const move = peekNextGrow(grid, otherId);
+    if (!move) continue;
+
+    const invaded = cellKey(move.target.col, move.target.row);
+    if (grid[invaded] !== bubbleId) continue;
+
+    const prev = out.get(invaded);
+    if (!prev || t > prev.t) out.set(invaded, { from: move.owner, t });
+  }
+
+  return out;
 };
 
 const edgeKey = (a: Point, b: Point) => {
@@ -281,26 +346,35 @@ const getFractionalPreview = (
   baseline: Record<string, BubbleId>,
   offsets: BubblePercentOffsets
 ): FractionalPreview | null => {
-  const gap =
-    getContinuousZeroSumCount(baseline, offsets, bubbleId) -
-    countBubbleCells(grid, bubbleId);
-
-  if (gap < 0.008 || gap >= 1 - 1e-6) return null;
+  const t = fractionalGrowGap(grid, baseline, offsets, bubbleId);
+  if (t <= 0) return null;
 
   const move = peekNextGrow(grid, bubbleId);
   if (!move) return null;
-  return { grow: { ...move, t: Math.min(gap, 1 - 1e-6) } };
+  return { grow: { ...move, t } };
 };
 
 const rectsForComponent = (
   component: Set<string>,
   cellSize: number,
-  preview: FractionalPreview | null
+  preview: FractionalPreview | null,
+  edgeAdjust: Map<string, EdgeAdjustment>
 ): Rect[] => {
   const rects: Rect[] = [];
 
   for (const key of component) {
     const [col, row] = key.split(",").map(Number);
+    const owner: GridCell = { col, row };
+    const adj = edgeAdjust.get(key);
+
+    if (adj) {
+      const kept = ownerKeepRect(owner, adj.from, adj.t, cellSize);
+      if (kept) {
+        rects.push(kept);
+        continue;
+      }
+    }
+
     rects.push(cellRect(col, row, cellSize));
   }
 
@@ -332,11 +406,21 @@ export const getBubbleOutlinePaths = (
       ? getFractionalPreview(grid, bubbleId, baseline, offsets)
       : null;
 
+  const edgeAdjust =
+    baseline && offsets
+      ? neighborEdgeAdjustments(grid, bubbleId, baseline, offsets)
+      : new Map<string, EdgeAdjustment>();
+
   const cornerRadius = Math.min(cellSize * 0.31, cellSize * 0.5 - 1);
   const paths: string[] = [];
 
   for (const component of splitConnectedComponents(cells)) {
-    const rects = rectsForComponent(component, cellSize, preview);
+    const rects = rectsForComponent(
+      component,
+      cellSize,
+      preview,
+      edgeAdjust
+    );
     const loop = traceBoundaryFromRects(rects);
     if (!loop) continue;
 
