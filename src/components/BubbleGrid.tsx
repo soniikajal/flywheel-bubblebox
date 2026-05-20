@@ -6,7 +6,7 @@ import {
   applyPercentOffsetsFromBaseline,
   type BubblePercentOffsets,
   getBaselineCellCounts,
-  getContinuousZeroSumCount,
+  getEffectivePercentVisual,
   parseBubbleOffsets,
   redistributeOffsets,
 } from "@/lib/bubbleGrid/adjustments";
@@ -57,6 +57,7 @@ type BubbleLayerProps = {
   cells: Array<{ col: number; row: number }>;
   grid: Record<string, BubbleId>;
   offsets: BubblePercentOffsets;
+  focusBubbleId: BubbleId;
 };
 
 function BubbleLayer({
@@ -65,6 +66,7 @@ function BubbleLayer({
   cells,
   grid,
   offsets,
+  focusBubbleId,
 }: BubbleLayerProps) {
   const filterId = `goo-${bubbleId}`;
   const paths = useMemo(
@@ -75,9 +77,10 @@ function BubbleLayer({
         cells,
         CELL_SIZE,
         INITIAL_LAYOUT,
-        offsets
+        offsets,
+        focusBubbleId
       ),
-    [bubbleId, cells, grid, offsets]
+    [bubbleId, cells, grid, offsets, focusBubbleId]
   );
   if (paths.length === 0) return null;
 
@@ -184,10 +187,20 @@ export default function BubbleGrid({ adjustments }: BubbleGridProps = {}) {
   );
   const [percentField, setPercentField] = useState("0");
 
-  const applyOffsets = useCallback((nextOffsets: BubblePercentOffsets) => {
-    setOffsets(nextOffsets);
-    setGrid(applyOffsetsToGrid({ ...INITIAL_LAYOUT }, INITIAL_LAYOUT, nextOffsets));
-  }, []);
+  const applyOffsets = useCallback(
+    (nextOffsets: BubblePercentOffsets, focusId?: BubbleId) => {
+      setOffsets(nextOffsets);
+      setGrid(
+        applyOffsetsToGrid(
+          { ...INITIAL_LAYOUT },
+          INITIAL_LAYOUT,
+          nextOffsets,
+          focusId ?? selectedBubbleId
+        )
+      );
+    },
+    [selectedBubbleId]
+  );
 
   const cellsByBubble = useMemo(() => {
     const map = BUBBLES.reduce(
@@ -237,7 +250,14 @@ export default function BubbleGrid({ adjustments }: BubbleGridProps = {}) {
         delta,
         BASELINE_COUNTS
       );
-      setGrid(applyOffsetsToGrid({ ...INITIAL_LAYOUT }, INITIAL_LAYOUT, next));
+      setGrid(
+        applyOffsetsToGrid(
+          { ...INITIAL_LAYOUT },
+          INITIAL_LAYOUT,
+          next,
+          selectedBubbleId
+        )
+      );
       return next;
     });
     setPercentField(
@@ -273,13 +293,13 @@ export default function BubbleGrid({ adjustments }: BubbleGridProps = {}) {
   };
 
   const formatEffectivePercent = (bubbleId: BubbleId) => {
-    const base = BASELINE_COUNTS[bubbleId];
-    const continuous = getContinuousZeroSumCount(
+    const pct = getEffectivePercentVisual(
+      grid,
       INITIAL_LAYOUT,
       offsets,
-      bubbleId
+      bubbleId,
+      selectedBubbleId
     );
-    const pct = base > 0 ? ((continuous / base) - 1) * 100 : 0;
     const rounded = Math.round(pct * 10) / 10;
     if (Math.abs(rounded) < 0.05) return "0%";
     const s = Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
@@ -303,6 +323,7 @@ export default function BubbleGrid({ adjustments }: BubbleGridProps = {}) {
             cells={cellsByBubble[bubble.id]}
             grid={grid}
             offsets={offsets}
+            focusBubbleId={selectedBubbleId}
           />
         ))}
       </div>

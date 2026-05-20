@@ -155,21 +155,63 @@ const enforceMinAndTotal = (
 };
 
 /**
+ * Primary bubble gets baseline × (1 + p/100) cells; remainder split among others
+ * by baseline share (matches “+100% = twice as big” on the adjusted color).
+ */
+const computeCellFirstTargets = (
+  baseline: Record<string, BubbleId>,
+  offsets: BubblePercentOffsets,
+  focusId: BubbleId
+): Record<BubbleId, number> => {
+  const baselineCounts = getBaselineCellCounts(baseline);
+  const pct = offsets[focusId] ?? 0;
+  const others = BUBBLES.filter((b) => b.id !== focusId);
+  const minOthers = MIN_BUBBLE_CELLS * others.length;
+
+  let primary = Math.round(baselineCounts[focusId] * (1 + pct / 100));
+  primary = Math.max(MIN_BUBBLE_CELLS, primary);
+  primary = Math.min(primary, TOTAL_CELLS - minOthers);
+
+  const remaining = TOTAL_CELLS - primary;
+  const otherBase = others.reduce((s, b) => s + baselineCounts[b.id], 0);
+
+  const weights = others.map((b) =>
+    otherBase > 0 ? baselineCounts[b.id] : 1
+  );
+  const otherTargets = apportionInteger(remaining, weights);
+
+  const merged = BUBBLES.map((b) =>
+    b.id === focusId ? primary : otherTargets[others.findIndex((o) => o.id === b.id)]!
+  );
+
+  const balanced = enforceMinAndTotal(merged, TOTAL_CELLS, MIN_BUBBLE_CELLS);
+
+  return BUBBLES.reduce(
+    (acc, { id }, i) => {
+      acc[id] = balanced[i];
+      return acc;
+    },
+    {} as Record<BubbleId, number>
+  );
+};
+
+/**
  * Zero-sum cell targets: total cells always equals grid size.
- * Bubbles with positive % gain cells; others lose proportionally.
+ * Uses cell-first allocation when focusId is set (UI adjusts one color at a time).
  */
 export const computeZeroSumTargets = (
   baseline: Record<string, BubbleId>,
-  offsets: BubblePercentOffsets
+  offsets: BubblePercentOffsets,
+  focusId?: BubbleId
 ): Record<BubbleId, number> => {
-  const baselineCounts = getBaselineCellCounts(baseline);
+  if (focusId && Math.abs(offsets[focusId] ?? 0) > 0.001) {
+    return computeCellFirstTargets(baseline, offsets, focusId);
+  }
 
-  const weights = BUBBLES.map(({ id }) => {
-    const percent = offsets[id] ?? 0;
-    return baselineCounts[id] * (1 + percent / 100);
-  });
-
-  const apportioned = apportionInteger(TOTAL_CELLS, weights);
+  const exact = BUBBLES.map(({ id }) =>
+    getContinuousZeroSumCount(baseline, offsets, id)
+  );
+  const apportioned = apportionInteger(TOTAL_CELLS, exact);
   const balanced = enforceMinAndTotal(apportioned, TOTAL_CELLS, MIN_BUBBLE_CELLS);
 
   return BUBBLES.reduce(
@@ -429,33 +471,94 @@ const syncGridToTargets = (
   return bestGrid;
 };
 
+/** Sub-cell gap vs integer targets (cell-first when focusId is set). */
+export const getSubCellGap = (
+  grid: Record<string, BubbleId>,
+  baseline: Record<string, BubbleId>,
+  offsets: BubblePercentOffsets,
+  bubbleId: BubbleId,
+  focusId?: BubbleId
+): number => {
+  const discrete = countBubbleCells(grid, bubbleId);
+  const target = computeZeroSumTargets(baseline, offsets, focusId)[bubbleId];
+
+  if (focusId === bubbleId) {
+    const base = countBubbleCells(baseline, bubbleId);
+    const exact = base * (1 + (offsets[bubbleId] ?? 0) / 100);
+    return exact - discrete;
+  }
+
+  return target - discrete;
+};
+
+/** Visual cell count = discrete cells + fractional grow strip on the outline. */
+export const getVisualCellCount = (
+  grid: Record<string, BubbleId>,
+  baseline: Record<string, BubbleId>,
+  offsets: BubblePercentOffsets,
+  bubbleId: BubbleId,
+  focusId?: BubbleId
+): number => {
+  const discrete = countBubbleCells(grid, bubbleId);
+  const gap = getSubCellGap(grid, baseline, offsets, bubbleId, focusId);
+  if (gap > 0.008 && gap < 1) return discrete + gap;
+  return discrete;
+};
+
+/** % change vs baseline from visual area (cells + sub-cell strip). */
+export const getEffectivePercentVisual = (
+  grid: Record<string, BubbleId>,
+  baseline: Record<string, BubbleId>,
+  offsets: BubblePercentOffsets,
+  bubbleId: BubbleId,
+  focusId?: BubbleId
+): number => {
+  const base = countBubbleCells(baseline, bubbleId);
+  if (base <= 0) return 0;
+  const visual = getVisualCellCount(
+    grid,
+    baseline,
+    offsets,
+    bubbleId,
+    focusId
+  );
+  return ((visual / base) - 1) * 100;
+};
+
 /** Rebuild from initial layout (backend / cold start). */
 export const applyPercentOffsetsFromBaseline = (
   baseline: Record<string, BubbleId>,
-  offsets: BubblePercentOffsets
-): Record<string, BubbleId> =>
-  reconcileGridToContinuous({ ...baseline }, baseline, offsets);
+  offsets: BubblePercentOffsets,
+  focusId?: BubbleId
+): Record<string, BubbleId> => {
+  const targets = computeZeroSumTargets(baseline, offsets, focusId);
+  return syncGridToTargets({ ...baseline }, targets);
+};
 
 /** Catch up from the current grid without resetting layout. */
 export const syncGridToOffsets = (
   current: Record<string, BubbleId>,
   baseline: Record<string, BubbleId>,
-  offsets: BubblePercentOffsets
+  offsets: BubblePercentOffsets,
+  focusId?: BubbleId
 ): Record<string, BubbleId> => {
-  const targets = computeZeroSumTargets(baseline, offsets);
+  const targets = computeZeroSumTargets(baseline, offsets, focusId);
   return syncGridToTargets(current, targets);
 };
 
 /**
- * Apply percent offsets: move the discrete grid only in whole-cell steps when
- * continuous zero-sum share differs by ≥1 cell. Sub-cell changes are outline-only.
+ * Apply percent offsets from baseline: sync discrete grid to zero-sum targets,
+ * then outline adds sub-cell strips for 0 < gap < 1.
  */
 export const applyOffsetsToGrid = (
-  current: Record<string, BubbleId>,
+  _current: Record<string, BubbleId>,
   baseline: Record<string, BubbleId>,
-  offsets: BubblePercentOffsets
-): Record<string, BubbleId> =>
-  reconcileGridToContinuous(current, baseline, offsets);
+  offsets: BubblePercentOffsets,
+  focusId?: BubbleId
+): Record<string, BubbleId> => {
+  const targets = computeZeroSumTargets(baseline, offsets, focusId);
+  return syncGridToTargets({ ...baseline }, targets);
+};
 
 /** Exact fractional cell share from zero-sum weights (before rounding). */
 export const getContinuousZeroSumCount = (

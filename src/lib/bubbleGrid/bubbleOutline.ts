@@ -1,8 +1,5 @@
-import {
-  getContinuousZeroSumCount,
-  type BubblePercentOffsets,
-} from "./adjustments";
-import { countBubbleCells, peekNextGrow } from "./gridLogic";
+import { getSubCellGap, type BubblePercentOffsets } from "./adjustments";
+import { peekNextGrow } from "./gridLogic";
 import { BubbleId, BUBBLES, COLS, ROWS, cellKey } from "./types";
 
 type Point = { x: number; y: number };
@@ -100,11 +97,10 @@ const fractionalGrowGap = (
   grid: Record<string, BubbleId>,
   baseline: Record<string, BubbleId>,
   offsets: BubblePercentOffsets,
-  bubbleId: BubbleId
+  bubbleId: BubbleId,
+  focusId?: BubbleId
 ): number => {
-  const gap =
-    getContinuousZeroSumCount(baseline, offsets, bubbleId) -
-    countBubbleCells(grid, bubbleId);
+  const gap = getSubCellGap(grid, baseline, offsets, bubbleId, focusId);
   if (gap < 0.008 || gap >= 1 - 1e-6) return 0;
   return Math.min(gap, 1 - 1e-6);
 };
@@ -116,14 +112,15 @@ const neighborEdgeAdjustments = (
   grid: Record<string, BubbleId>,
   bubbleId: BubbleId,
   baseline: Record<string, BubbleId>,
-  offsets: BubblePercentOffsets
+  offsets: BubblePercentOffsets,
+  focusId?: BubbleId
 ): Map<string, EdgeAdjustment> => {
   const out = new Map<string, EdgeAdjustment>();
 
   for (const { id: otherId } of BUBBLES) {
     if (otherId === bubbleId) continue;
 
-    const t = fractionalGrowGap(grid, baseline, offsets, otherId);
+    const t = fractionalGrowGap(grid, baseline, offsets, otherId, focusId);
     if (t <= 0) continue;
 
     const move = peekNextGrow(grid, otherId);
@@ -344,9 +341,10 @@ const getFractionalPreview = (
   grid: Record<string, BubbleId>,
   bubbleId: BubbleId,
   baseline: Record<string, BubbleId>,
-  offsets: BubblePercentOffsets
+  offsets: BubblePercentOffsets,
+  focusId?: BubbleId
 ): FractionalPreview | null => {
-  const t = fractionalGrowGap(grid, baseline, offsets, bubbleId);
+  const t = fractionalGrowGap(grid, baseline, offsets, bubbleId, focusId);
   if (t <= 0) return null;
 
   const move = peekNextGrow(grid, bubbleId);
@@ -397,18 +395,25 @@ export const getBubbleOutlinePaths = (
   cells: Array<{ col: number; row: number }>,
   cellSize: number,
   baseline?: Record<string, BubbleId>,
-  offsets?: BubblePercentOffsets
+  offsets?: BubblePercentOffsets,
+  focusId?: BubbleId
 ): string[] => {
   if (cells.length === 0) return [];
 
   const preview =
     baseline && offsets
-      ? getFractionalPreview(grid, bubbleId, baseline, offsets)
+      ? getFractionalPreview(grid, bubbleId, baseline, offsets, focusId)
       : null;
 
   const edgeAdjust =
     baseline && offsets
-      ? neighborEdgeAdjustments(grid, bubbleId, baseline, offsets)
+      ? neighborEdgeAdjustments(
+          grid,
+          bubbleId,
+          baseline,
+          offsets,
+          focusId
+        )
       : new Map<string, EdgeAdjustment>();
 
   const cornerRadius = Math.min(cellSize * 0.31, cellSize * 0.5 - 1);
