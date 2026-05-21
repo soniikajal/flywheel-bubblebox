@@ -243,14 +243,8 @@ function BubbleLayer({
 
 /** Rounded underlay (same geometry as goo layers) — fills gaps without square corners. */
 function CoverageUnderlay({
-  grid,
-  offsets,
-  layoutFocusId,
   cellsByBubble,
 }: {
-  grid: Record<string, BubbleId>;
-  offsets: BubblePercentOffsets;
-  layoutFocusId: BubbleId;
   cellsByBubble: Record<BubbleId, Array<{ col: number; row: number }>>;
 }) {
   const layers = useMemo(
@@ -258,17 +252,9 @@ function CoverageUnderlay({
       BUBBLES.map((bubble) => ({
         id: bubble.id,
         color: bubble.color,
-        paths: getBubbleOutlinePaths(
-          grid,
-          bubble.id,
-          cellsByBubble[bubble.id],
-          CELL_SIZE,
-          INITIAL_LAYOUT,
-          offsets,
-          layoutFocusId
-        ),
+        paths: getBubbleOutlinePaths(cellsByBubble[bubble.id], CELL_SIZE),
       })).filter((l) => l.paths.length > 0),
-    [grid, offsets, layoutFocusId, cellsByBubble]
+    [cellsByBubble]
   );
 
   if (layers.length === 0) return null;
@@ -421,18 +407,10 @@ export default function BubbleGrid({ adjustments }: BubbleGridProps = {}) {
   const visualPaths = useMemo(() => {
     const out = {} as Record<BubbleId, string[]>;
     for (const { id } of BUBBLES) {
-      out[id] = getBubbleOutlinePaths(
-        grid,
-        id,
-        cellsByBubble[id],
-        CELL_SIZE,
-        INITIAL_LAYOUT,
-        offsets,
-        layoutFocusId
-      );
+      out[id] = getBubbleOutlinePaths(cellsByBubble[id], CELL_SIZE);
     }
     return out;
-  }, [grid, cellsByBubble, offsets, layoutFocusId]);
+  }, [cellsByBubble]);
 
   const formatOffsetForField = useCallback((id: BubbleId) => {
     const v = offsets[id] ?? 0;
@@ -523,12 +501,7 @@ export default function BubbleGrid({ adjustments }: BubbleGridProps = {}) {
         style={{ width: SVG_WIDTH, height: SVG_HEIGHT }}
         aria-label="Bubble grid"
       >
-        <CoverageUnderlay
-          grid={grid}
-          offsets={offsets}
-          layoutFocusId={layoutFocusId}
-          cellsByBubble={cellsByBubble}
-        />
+        <CoverageUnderlay cellsByBubble={cellsByBubble} />
 
         <ReferenceGrid />
 

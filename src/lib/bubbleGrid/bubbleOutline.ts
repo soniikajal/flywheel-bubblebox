@@ -1,12 +1,6 @@
-import {
-  getContinuousZeroSumCount,
-  type BubblePercentOffsets,
-} from "./adjustments";
-import { countBubbleCells, listGrowCandidates } from "./gridLogic";
-import { BubbleId, cellKey } from "./types";
+import { cellKey } from "./types";
 
 type Point = { x: number; y: number };
-type GridCell = { col: number; row: number };
 type Rect = { x0: number; y0: number; x1: number; y1: number };
 
 const ptKey = (p: Point) => `${p.x},${p.y}`;
@@ -47,139 +41,6 @@ const cellRect = (col: number, row: number, cellSize: number): Rect => {
   const x0 = col * cellSize;
   const y0 = row * cellSize;
   return { x0, y0, x1: x0 + cellSize, y1: y0 + cellSize };
-};
-
-/** Strip of `target` cell taken from the side touching `owner` (grow preview). */
-const partialGrowRect = (
-  owner: GridCell,
-  target: GridCell,
-  t: number,
-  cellSize: number
-): Rect | null => {
-  const dc = target.col - owner.col;
-  const dr = target.row - owner.row;
-  const x0 = target.col * cellSize;
-  const y0 = target.row * cellSize;
-  const x1 = x0 + cellSize;
-  const y1 = y0 + cellSize;
-  const d = t * cellSize;
-
-  if (dc === 1) return { x0, y0, x1: x0 + d, y1 };
-  if (dc === -1) return { x0: x1 - d, y0, x1, y1 };
-  if (dr === 1) return { x0, y0, x1, y1: y0 + d };
-  if (dr === -1) return { x0, y0: y1 - d, x1, y1 };
-  return null;
-};
-
-/** `owner` minus the strip that partialGrowRect(from, owner, t) would add (shared-edge shrink). */
-const ownerKeepRect = (
-  owner: GridCell,
-  from: GridCell,
-  t: number,
-  cellSize: number
-): Rect | null => {
-  const dc = owner.col - from.col;
-  const dr = owner.row - from.row;
-  const x0 = owner.col * cellSize;
-  const y0 = owner.row * cellSize;
-  const x1 = x0 + cellSize;
-  const y1 = y0 + cellSize;
-  const d = t * cellSize;
-
-  if (dc === 1) return { x0: x0 + d, y0, x1, y1 };
-  if (dc === -1) return { x0, y0, x1: x1 - d, y1 };
-  if (dr === 1) return { x0, y0: y0 + d, x1, y1 };
-  if (dr === -1) return { x0, y0, x1, y1: y1 - d };
-  return null;
-};
-
-const continuousGap = (
-  grid: Record<string, BubbleId>,
-  baseline: Record<string, BubbleId>,
-  offsets: BubblePercentOffsets,
-  bubbleId: BubbleId
-): number => {
-  const discrete = countBubbleCells(grid, bubbleId);
-  const exact = getContinuousZeroSumCount(baseline, offsets, bubbleId);
-  return exact - discrete;
-};
-
-/** Sub-cell grow strip when discrete cells are slightly below continuous target. */
-const fractionalGrowGap = (
-  grid: Record<string, BubbleId>,
-  baseline: Record<string, BubbleId>,
-  offsets: BubblePercentOffsets,
-  bubbleId: BubbleId,
-  layoutFocusId?: BubbleId
-): number => {
-  if (layoutFocusId !== undefined && bubbleId !== layoutFocusId) return 0;
-  const gap = continuousGap(grid, baseline, offsets, bubbleId);
-  if (gap < 0.008 || gap >= 1 - 1e-6) return 0;
-  return Math.min(gap, 1 - 1e-6);
-};
-
-type GrowMove = { owner: GridCell; target: GridCell; t: number };
-
-/** Pick grow into the neighbor most above its fair continuous share. */
-const pickFocusGrowMove = (
-  grid: Record<string, BubbleId>,
-  bubbleId: BubbleId,
-  baseline: Record<string, BubbleId>,
-  offsets: BubblePercentOffsets,
-  t: number
-): GrowMove | null => {
-  const candidates = listGrowCandidates(grid, bubbleId);
-  if (candidates.length === 0) return null;
-
-  const best = candidates
-    .map((cand) => ({
-      cand,
-      surplus:
-        countBubbleCells(grid, cand.neighborId) -
-        getContinuousZeroSumCount(baseline, offsets, cand.neighborId),
-    }))
-    .sort((a, b) => b.surplus - a.surplus)[0]!.cand;
-
-  return { owner: best.owner, target: best.target, t };
-};
-
-const getActiveGrowMove = (
-  grid: Record<string, BubbleId>,
-  baseline: Record<string, BubbleId>,
-  offsets: BubblePercentOffsets,
-  layoutFocusId?: BubbleId
-): GrowMove | null => {
-  if (!layoutFocusId) return null;
-  const t = fractionalGrowGap(
-    grid,
-    baseline,
-    offsets,
-    layoutFocusId,
-    layoutFocusId
-  );
-  if (t <= 0) return null;
-  return pickFocusGrowMove(grid, layoutFocusId, baseline, offsets, t);
-};
-
-type EdgeAdjustment = { from: GridCell; t: number };
-
-/** Shrink cells the focused bubble is growing into (shared-edge coupling). */
-const neighborEdgeAdjustments = (
-  grid: Record<string, BubbleId>,
-  bubbleId: BubbleId,
-  baseline: Record<string, BubbleId>,
-  offsets: BubblePercentOffsets,
-  layoutFocusId?: BubbleId
-): Map<string, EdgeAdjustment> => {
-  const out = new Map<string, EdgeAdjustment>();
-  const grow = getActiveGrowMove(grid, baseline, offsets, layoutFocusId);
-  if (!grow) return out;
-
-  const invaded = cellKey(grow.target.col, grow.target.row);
-  if (grid[invaded] !== bubbleId) return out;
-
-  out.set(invaded, { from: grow.owner, t: grow.t });
-  return out;
 };
 
 const edgeKey = (a: Point, b: Point) => {
@@ -363,103 +224,26 @@ const splitConnectedComponents = (
   return components;
 };
 
-type FractionalPreview = {
-  grow?: { owner: GridCell; target: GridCell; t: number };
-};
-
-const getFractionalPreview = (
-  grid: Record<string, BubbleId>,
-  bubbleId: BubbleId,
-  baseline: Record<string, BubbleId>,
-  offsets: BubblePercentOffsets,
-  layoutFocusId?: BubbleId
-): FractionalPreview | null => {
-  if (layoutFocusId !== bubbleId) return null;
-  const grow = getActiveGrowMove(grid, baseline, offsets, layoutFocusId);
-  if (!grow) return null;
-  return { grow: { owner: grow.owner, target: grow.target, t: grow.t } };
-};
-
 const rectsForComponent = (
   component: Set<string>,
-  cellSize: number,
-  preview: FractionalPreview | null,
-  edgeAdjust: Map<string, EdgeAdjustment>
-): Rect[] => {
-  const rects: Rect[] = [];
-
-  for (const key of Array.from(component)) {
+  cellSize: number
+): Rect[] =>
+  Array.from(component).map((key) => {
     const [col, row] = key.split(",").map(Number);
-    const owner: GridCell = { col, row };
-    const adj = edgeAdjust.get(key);
-
-    if (adj) {
-      const kept = ownerKeepRect(owner, adj.from, adj.t, cellSize);
-      if (kept) {
-        rects.push(kept);
-        continue;
-      }
-    }
-
-    rects.push(cellRect(col, row, cellSize));
-  }
-
-  if (preview?.grow) {
-    const strip = partialGrowRect(
-      preview.grow.owner,
-      preview.grow.target,
-      preview.grow.t,
-      cellSize
-    );
-    if (strip) rects.push(strip);
-  }
-
-  return rects;
-};
+    return cellRect(col, row, cellSize);
+  });
 
 export const getBubbleOutlinePaths = (
-  grid: Record<string, BubbleId>,
-  bubbleId: BubbleId,
   cells: Array<{ col: number; row: number }>,
-  cellSize: number,
-  baseline?: Record<string, BubbleId>,
-  offsets?: BubblePercentOffsets,
-  layoutFocusId?: BubbleId
+  cellSize: number
 ): string[] => {
   if (cells.length === 0) return [];
-
-  const preview =
-    baseline && offsets
-      ? getFractionalPreview(
-          grid,
-          bubbleId,
-          baseline,
-          offsets,
-          layoutFocusId
-        )
-      : null;
-
-  const edgeAdjust =
-    baseline && offsets
-      ? neighborEdgeAdjustments(
-          grid,
-          bubbleId,
-          baseline,
-          offsets,
-          layoutFocusId
-        )
-      : new Map<string, EdgeAdjustment>();
 
   const cornerRadius = Math.min(cellSize * 0.31, cellSize * 0.5 - 1);
   const paths: string[] = [];
 
   for (const component of splitConnectedComponents(cells)) {
-    const rects = rectsForComponent(
-      component,
-      cellSize,
-      preview,
-      edgeAdjust
-    );
+    const rects = rectsForComponent(component, cellSize);
     const loop = traceBoundaryFromRects(rects);
     if (!loop) continue;
 

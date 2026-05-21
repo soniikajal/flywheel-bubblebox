@@ -156,47 +156,71 @@ const enforceMinAndTotal = (
 
 /**
  * Zero-sum cell targets from continuous area shares (largest-remainder apportion).
- * Focus bubble is capped at floor(exact area) so extra growth shows as a sub-cell strip.
+ * Growing focus bubbles claim full cells once continuous share passes half a cell.
  */
 export const computeZeroSumTargets = (
   baseline: Record<string, BubbleId>,
   offsets: BubblePercentOffsets,
   focusId?: BubbleId
 ): Record<BubbleId, number> => {
-  const baselineCounts = getBaselineCellCounts(baseline);
   const exact = BUBBLES.map(({ id }) =>
     getContinuousZeroSumCount(baseline, offsets, id)
   );
   const targets = apportionInteger(TOTAL_CELLS, exact);
-
-  if (focusId && (offsets[focusId] ?? 0) > 0.001) {
-    const fi = BUBBLES.findIndex((b) => b.id === focusId);
-    const focusExact =
-      baselineCounts[focusId] * (1 + (offsets[focusId] ?? 0) / 100);
-    const cap = Math.max(MIN_BUBBLE_CELLS, Math.floor(focusExact));
-    if (targets[fi]! > cap) {
-      let spare = targets[fi]! - cap;
-      targets[fi]! = cap;
-      const receivers = BUBBLES.map((b, i) => ({ i, w: exact[i]! }))
-        .filter((r) => r.i !== fi)
-        .sort((a, b) => b.w - a.w);
-      for (const r of receivers) {
-        if (spare <= 0) break;
-        targets[r.i]!++;
-        spare--;
-      }
-    }
-  }
-
   const balanced = enforceMinAndTotal(targets, TOTAL_CELLS, MIN_BUBBLE_CELLS);
+  const withFocusGrow =
+    focusId && (offsets[focusId] ?? 0) > 0.001
+      ? bumpFocusGrowTarget(balanced, baseline, offsets, focusId)
+      : balanced;
 
   return BUBBLES.reduce(
     (acc, { id }, i) => {
-      acc[id] = balanced[i];
+      acc[id] = withFocusGrow[i]!;
       return acc;
     },
     {} as Record<BubbleId, number>
   );
+};
+
+/** When focus grows, use a full cell once continuous share passes half a cell (no sub-cell strips). */
+const bumpFocusGrowTarget = (
+  targets: number[],
+  baseline: Record<string, BubbleId>,
+  offsets: BubblePercentOffsets,
+  focusId: BubbleId
+): number[] => {
+  const fi = BUBBLES.findIndex((b) => b.id === focusId);
+  if (fi < 0) return targets;
+
+  const focusExact = getContinuousZeroSumCount(baseline, offsets, focusId);
+  const desired = Math.max(
+    MIN_BUBBLE_CELLS,
+    Math.ceil(focusExact - 1e-9)
+  );
+  const t = [...targets];
+
+  while (t[fi]! < desired) {
+    let donor = -1;
+    let bestScore = -1;
+    for (let i = 0; i < t.length; i++) {
+      if (i === fi || t[i]! <= MIN_BUBBLE_CELLS) continue;
+      const donorExact = getContinuousZeroSumCount(
+        baseline,
+        offsets,
+        BUBBLES[i]!.id
+      );
+      const score = t[i]! - Math.max(MIN_BUBBLE_CELLS, Math.floor(donorExact));
+      if (score > bestScore) {
+        bestScore = score;
+        donor = i;
+      }
+    }
+    if (donor < 0) break;
+    t[fi]!++;
+    t[donor]!--;
+  }
+
+  return enforceMinAndTotal(t, TOTAL_CELLS, MIN_BUBBLE_CELLS);
 };
 
 const allAtTargets = (
@@ -618,32 +642,13 @@ export const getSubCellGap = (
   return exact - discrete;
 };
 
-/** Visual cell count = discrete cells + fractional grow strip on the outline. */
-export const getVisualCellCount = (
-  grid: Record<string, BubbleId>,
-  baseline: Record<string, BubbleId>,
-  offsets: BubblePercentOffsets,
-  bubbleId: BubbleId
-): number => {
-  const discrete = countBubbleCells(grid, bubbleId);
-  const gap = getSubCellGap(grid, baseline, offsets, bubbleId);
-  if (gap > 0.008 && gap < 1) return discrete + gap;
-  return discrete;
-};
-
-/** % change vs baseline from visual area (cells + sub-cell strip). */
+/** % change vs baseline from discrete cell ownership (matches on-screen blobs). */
 export const getEffectivePercentVisual = (
   grid: Record<string, BubbleId>,
   baseline: Record<string, BubbleId>,
-  offsets: BubblePercentOffsets,
+  _offsets: BubblePercentOffsets,
   bubbleId: BubbleId
-): number => {
-  const base = countBubbleCells(baseline, bubbleId);
-  if (base <= 0) return 0;
-
-  const visual = getVisualCellCount(grid, baseline, offsets, bubbleId);
-  return ((visual / base) - 1) * 100;
-};
+): number => getEffectivePercent(grid, baseline, bubbleId);
 
 /** Rebuild from initial layout (backend / cold start). */
 export const applyPercentOffsetsFromBaseline = (
@@ -666,10 +671,7 @@ export const syncGridToOffsets = (
   return syncGridToTargets(current, targets, baseline, offsets, focusId);
 };
 
-/**
- * Apply percent offsets from baseline: sync discrete grid to zero-sum targets,
- * then outline adds sub-cell strips for 0 < gap < 1.
- */
+/** Apply percent offsets from baseline: sync discrete grid to zero-sum targets. */
 export const applyOffsetsToGrid = (
   _current: Record<string, BubbleId>,
   baseline: Record<string, BubbleId>,
