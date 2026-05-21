@@ -3,7 +3,7 @@ import {
   type BubblePercentOffsets,
 } from "./adjustments";
 import { countBubbleCells, listGrowCandidates } from "./gridLogic";
-import { BubbleId, BUBBLES, COLS, ROWS, cellKey } from "./types";
+import { BubbleId, cellKey } from "./types";
 
 type Point = { x: number; y: number };
 type GridCell = { col: number; row: number };
@@ -212,7 +212,7 @@ const traceBoundaryFromRects = (rects: Rect[]): Point[] | null => {
   }
 
   const next = new Map<string, Point>();
-  for (const [k, n] of edgeCount) {
+  for (const [k, n] of Array.from(edgeCount.entries())) {
     if (n !== 1) continue;
     const [a, b] = edgeEnds.get(k)!;
     const fk = ptKey(a);
@@ -388,7 +388,7 @@ const rectsForComponent = (
 ): Rect[] => {
   const rects: Rect[] = [];
 
-  for (const key of component) {
+  for (const key of Array.from(component)) {
     const [col, row] = key.split(",").map(Number);
     const owner: GridCell = { col, row };
     const adj = edgeAdjust.get(key);

@@ -611,8 +611,7 @@ export const getSubCellGap = (
   grid: Record<string, BubbleId>,
   baseline: Record<string, BubbleId>,
   offsets: BubblePercentOffsets,
-  bubbleId: BubbleId,
-  focusId?: BubbleId
+  bubbleId: BubbleId
 ): number => {
   const discrete = countBubbleCells(grid, bubbleId);
   const exact = getContinuousZeroSumCount(baseline, offsets, bubbleId);
@@ -624,11 +623,10 @@ export const getVisualCellCount = (
   grid: Record<string, BubbleId>,
   baseline: Record<string, BubbleId>,
   offsets: BubblePercentOffsets,
-  bubbleId: BubbleId,
-  focusId?: BubbleId
+  bubbleId: BubbleId
 ): number => {
   const discrete = countBubbleCells(grid, bubbleId);
-  const gap = getSubCellGap(grid, baseline, offsets, bubbleId, focusId);
+  const gap = getSubCellGap(grid, baseline, offsets, bubbleId);
   if (gap > 0.008 && gap < 1) return discrete + gap;
   return discrete;
 };
@@ -638,19 +636,12 @@ export const getEffectivePercentVisual = (
   grid: Record<string, BubbleId>,
   baseline: Record<string, BubbleId>,
   offsets: BubblePercentOffsets,
-  bubbleId: BubbleId,
-  focusId?: BubbleId
+  bubbleId: BubbleId
 ): number => {
   const base = countBubbleCells(baseline, bubbleId);
   if (base <= 0) return 0;
 
-  const visual = getVisualCellCount(
-    grid,
-    baseline,
-    offsets,
-    bubbleId,
-    focusId
-  );
+  const visual = getVisualCellCount(grid, baseline, offsets, bubbleId);
   return ((visual / base) - 1) * 100;
 };
 

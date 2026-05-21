@@ -72,19 +72,14 @@ export const calibrateWeights = (
   height: number,
   baseline: Record<string, BubbleId>,
   offsets: BubblePercentOffsets,
-  scale: number = RASTER_SCALE
+  scale: number = CALIBRATE_SCALE
 ): Record<BubbleId, number> => {
   const targets = targetAreaShares(baseline, offsets);
   const weights = { ...weightsFromOffsets(offsets) };
 
   for (let iter = 0; iter < 10; iter++) {
     const shares = measureAreaShares(
-      computeOwnershipFieldWithWeights(
-        width,
-        height,
-        weights,
-        CALIBRATE_SCALE
-      )
+      computeOwnershipFieldWithWeights(width, height, weights, scale)
     );
 
     let maxErr = 0;
