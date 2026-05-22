@@ -43,22 +43,21 @@ const GOO_FILTER_PROPS = {
   height: "140%",
 } as const;
 
-/** Decaying squish + slight twist — reads as goo, not a discrete snap. */
+/** Decaying squish + slight twist — slow settle, soft overshoot (visual only). */
 const JELLY_WOBBLE = {
-  scaleX: [1, 1.068, 0.978, 1.03, 0.994, 1.003, 1.001, 1] as number[],
-  scaleY: [1, 0.934, 1.055, 0.972, 1.008, 0.997, 0.999, 1] as number[],
-  rotate: [0, 0.65, -0.48, 0.28, -0.1, 0.04, 0.012, 0] as number[],
+  scaleX: [1, 1.038, 0.988, 1.016, 0.997, 1.001, 1] as number[],
+  scaleY: [1, 0.965, 1.028, 0.984, 1.003, 0.999, 1] as number[],
+  rotate: [0, 0.38, -0.28, 0.14, -0.05, 0.015, 0] as number[],
   transition: {
-    duration: 0.82,
-    times: [0, 0.1, 0.26, 0.42, 0.56, 0.68, 0.84, 1],
+    duration: 1.85,
+    times: [0, 0.16, 0.38, 0.55, 0.72, 0.88, 1],
     ease: [
-      [0.22, 0.55, 0.36, 1],
-      [0.34, 1.15, 0.55, 1],
-      [0.25, 0.85, 0.4, 1],
-      [0.33, 1, 0.68, 1],
-      [0.22, 0.85, 0.36, 1],
-      [0.25, 0.55, 0.25, 1],
-      [0.22, 0.35, 0.25, 1],
+      [0.22, 0.08, 0.26, 1],
+      [0.28, 0.72, 0.42, 1],
+      [0.24, 0.68, 0.38, 1],
+      [0.3, 0.82, 0.52, 1],
+      [0.22, 0.62, 0.34, 1],
+      [0.25, 0.42, 0.28, 1],
     ] as [number, number, number, number][],
   },
 };
@@ -72,6 +71,17 @@ function bubbleGridSignature(
     if (owner === bubbleId) keys.push(key);
   }
   return keys.sort().join("|");
+}
+
+/** Bubbles whose cell ownership changed (grow, shrink, or shift). */
+function bubblesWithChangedTopology(
+  prevGrid: Record<string, BubbleId>,
+  nextGrid: Record<string, BubbleId>
+): BubbleId[] {
+  return BUBBLES.map((b) => b.id).filter(
+    (id) =>
+      bubbleGridSignature(prevGrid, id) !== bubbleGridSignature(nextGrid, id)
+  );
 }
 
 function useJellyWobble(pulse: number) {
@@ -150,6 +160,7 @@ function JellyPaths({
     <motion.g
       initial={{ scaleX: 1, scaleY: 1, rotate: 0 }}
       animate={wobble}
+      transition={{ type: "tween" }}
       style={{ transformOrigin: origin, transformBox: "fill-box" }}
     >
       {pathsContent}
@@ -360,32 +371,44 @@ export default function BubbleGrid({ adjustments }: BubbleGridProps = {}) {
   const [wigglePulse, setWigglePulse] = useState<
     Partial<Record<BubbleId, number>>
   >({});
-  const [outlineEpoch, setOutlineEpoch] = useState(0);
+  const [outlineEpochByBubble, setOutlineEpochByBubble] = useState<
+    Partial<Record<BubbleId, number>>
+  >({});
 
-  const triggerJellyWobble = useCallback((focusId: BubbleId) => {
-    setOutlineEpoch((e) => e + 1);
-    setWigglePulse((prev) => ({
-      ...prev,
-      [focusId]: (prev[focusId] ?? 0) + 1,
-    }));
+  const triggerJellyWobble = useCallback((affectedIds: BubbleId[]) => {
+    if (affectedIds.length === 0) return;
+    setOutlineEpochByBubble((epochs) => {
+      const next = { ...epochs };
+      for (const id of affectedIds) {
+        next[id] = (next[id] ?? 0) + 1;
+      }
+      return next;
+    });
+    setWigglePulse((prev) => {
+      const next = { ...prev };
+      for (const id of affectedIds) {
+        next[id] = (prev[id] ?? 0) + 1;
+      }
+      return next;
+    });
   }, []);
 
   const applyOffsets = useCallback(
     (nextOffsets: BubblePercentOffsets, focusId?: BubbleId) => {
       const focus = focusId ?? layoutFocusId;
+      const nextGrid = applyOffsetsToGrid(
+        { ...INITIAL_LAYOUT },
+        INITIAL_LAYOUT,
+        nextOffsets,
+        focus
+      );
+      const affected = bubblesWithChangedTopology(grid, nextGrid);
       setOffsets(nextOffsets);
       setLayoutFocusId(focus);
-      setGrid(
-        applyOffsetsToGrid(
-          { ...INITIAL_LAYOUT },
-          INITIAL_LAYOUT,
-          nextOffsets,
-          focus
-        )
-      );
-      triggerJellyWobble(focus);
+      setGrid(nextGrid);
+      triggerJellyWobble(affected);
     },
-    [layoutFocusId, triggerJellyWobble]
+    [grid, layoutFocusId, triggerJellyWobble]
   );
 
   const cellsByBubble = useMemo(() => {
@@ -440,19 +463,20 @@ export default function BubbleGrid({ adjustments }: BubbleGridProps = {}) {
     if (Math.abs(target) < 0.001) delete next[selectedBubbleId];
     else next[selectedBubbleId] = target;
 
+    const nextGrid = applyOffsetsToGrid(
+      { ...INITIAL_LAYOUT },
+      INITIAL_LAYOUT,
+      next,
+      selectedBubbleId
+    );
+    const affected = bubblesWithChangedTopology(grid, nextGrid);
+
     setOffsets(next);
     setLayoutFocusId(selectedBubbleId);
-    setGrid(
-      applyOffsetsToGrid(
-        { ...INITIAL_LAYOUT },
-        INITIAL_LAYOUT,
-        next,
-        selectedBubbleId
-      )
-    );
-    triggerJellyWobble(selectedBubbleId);
+    setGrid(nextGrid);
+    triggerJellyWobble(affected);
     setPercentField(Math.abs(target) < 0.05 ? "0" : String(target));
-  }, [percentField, selectedBubbleId, offsets, triggerJellyWobble]);
+  }, [grid, percentField, selectedBubbleId, offsets, triggerJellyWobble]);
 
   const handleFormSubmit = useCallback(
     (e: FormEvent<HTMLFormElement>) => {
@@ -512,10 +536,8 @@ export default function BubbleGrid({ adjustments }: BubbleGridProps = {}) {
             color={bubble.color}
             paths={visualPaths[bubble.id]}
             cells={cellsByBubble[bubble.id]}
-            jellyPulse={
-              bubble.id === layoutFocusId ? (wigglePulse[bubble.id] ?? 0) : 0
-            }
-            outlineEpoch={outlineEpoch}
+            jellyPulse={wigglePulse[bubble.id] ?? 0}
+            outlineEpoch={outlineEpochByBubble[bubble.id] ?? 0}
             topologySignature={bubbleGridSignature(grid, bubble.id)}
           />
         ))}
